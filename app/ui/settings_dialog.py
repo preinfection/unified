@@ -52,11 +52,12 @@ class SettingsDialog(QDialog):
         self.interval_spin.setValue(int(settings.get("sync_interval_minutes")))
         self.notify_check = QCheckBox("Show desktop notifications for new mail")
         self.notify_check.setChecked(bool(settings.get("notifications_enabled")))
-        self.per_folder_spin = QSpinBox()
-        self.per_folder_spin.setRange(10, 500)
-        self.per_folder_spin.setValue(int(settings.get("messages_per_folder")))
+        self.shown_spin = QSpinBox()
+        self.shown_spin.setRange(100, 10000)
+        self.shown_spin.setSingleStep(100)
+        self.shown_spin.setValue(int(settings.get("messages_shown")))
         form.addRow("Sync every:", self.interval_spin)
-        form.addRow("Messages per folder:", self.per_folder_spin)
+        form.addRow("Messages shown per view:", self.shown_spin)
         form.addRow(self.notify_check)
         layout.addWidget(general)
 
@@ -147,5 +148,5 @@ class SettingsDialog(QDialog):
     def _save(self) -> None:
         self.settings.set("sync_interval_minutes", self.interval_spin.value())
         self.settings.set("notifications_enabled", self.notify_check.isChecked())
-        self.settings.set("messages_per_folder", self.per_folder_spin.value())
+        self.settings.set("messages_shown", self.shown_spin.value())
         self.accept()

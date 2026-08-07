@@ -35,18 +35,70 @@ class GmailClient:
 
     # ------------------------------------------------------------------ fetching
 
-    def list_message_ids(self, folder: str, max_results: int = 50) -> list[str]:
+    def list_all_message_ids(self, folder: str, on_page=None) -> list[str]:
+        """Return every message id in a folder, newest first, via pagination.
+
+        on_page(count_so_far) is called after each page for progress display.
+        """
         label = FOLDER_LABELS[folder]
-        try:
-            resp = (
-                self.service.users()
-                .messages()
-                .list(userId="me", labelIds=[label], maxResults=max_results)
-                .execute()
-            )
-        except HttpError as e:
-            raise GmailClientError(f"Gmail list failed: {e}") from e
-        return [m["id"] for m in resp.get("messages", [])]
+        ids: list[str] = []
+        page_token: str | None = None
+        while True:
+            try:
+                resp = (
+                    self.service.users()
+                    .messages()
+                    .list(
+                        userId="me",
+                        labelIds=[label],
+                        maxResults=500,
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
+            except HttpError as e:
+                raise GmailClientError(f"Gmail list failed: {e}") from e
+            ids.extend(m["id"] for m in resp.get("messages", []))
+            if on_page:
+                on_page(len(ids))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                return ids
+
+    def fetch_messages(
+        self,
+        msg_ids: list[str],
+        account_id: int,
+        folder: str,
+        on_message,
+        batch_size: int = 40,
+    ) -> None:
+        """Fetch full messages in batched API calls; on_message(dict) per message.
+
+        Batching cuts round-trips ~40x, which matters for initial imports of
+        large mailboxes. Individual failures are logged and skipped so one bad
+        message never aborts the sync.
+        """
+
+        def _callback(request_id, response, exception) -> None:
+            if exception is not None:
+                log.warning("Gmail fetch failed for one message: %s", exception)
+                return
+            on_message(self._to_message_dict(response, account_id, folder))
+
+        for start in range(0, len(msg_ids), batch_size):
+            chunk = msg_ids[start:start + batch_size]
+            try:
+                batch = self.service.new_batch_http_request(callback=_callback)
+                for msg_id in chunk:
+                    batch.add(
+                        self.service.users()
+                        .messages()
+                        .get(userId="me", id=msg_id, format="full")
+                    )
+                batch.execute()
+            except HttpError as e:
+                raise GmailClientError(f"Gmail batch fetch failed: {e}") from e
 
     def fetch_message(self, msg_id: str, account_id: int, folder: str) -> dict:
         try:

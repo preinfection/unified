@@ -121,6 +121,17 @@ QMenu {
 QMenu::item { padding: 5px 24px 5px 12px; border-radius: 3px; }
 QMenu::item:selected { background: #eeeeee; }
 
+/* ---- Progress ---- */
+QProgressBar {
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    background: #ffffff;
+    text-align: center;
+    min-height: 14px;
+    max-height: 14px;
+}
+QProgressBar::chunk { background: #111111; border-radius: 3px; }
+
 /* ---- Misc ---- */
 QStatusBar {
     background: #ffffff;

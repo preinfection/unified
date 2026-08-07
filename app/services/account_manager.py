@@ -21,14 +21,14 @@ class AccountManager:
 
     # --------------------------------------------------------------------- gmail
 
-    def add_gmail_account(self) -> dict:
-        """Run the OAuth consent flow and register the account.
+    def register_gmail_account(self, creds) -> dict:
+        """Register an account from freshly obtained OAuth credentials.
 
-        Blocking (opens a browser and waits) - call from a worker thread.
+        The interactive flow itself runs in the caller's worker thread (see
+        CancellableOAuthFlow); this only stores the token and the DB row.
         """
         from app.email.gmail_client import GmailClient
 
-        creds = gmail_oauth.run_oauth_flow()
         email_addr = GmailClient.profile_email(creds)
         if self.db.get_account_by_email(email_addr):
             gmail_oauth.save_token(email_addr, creds)  # refresh stored token anyway

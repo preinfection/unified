@@ -12,8 +12,15 @@ accounts into one unified inbox. Built with Python, PySide6 and SQLite.
   an attachment indicator
 - **Multiple accounts** - any number of Gmail accounts (OAuth2 via the Gmail
   API) plus custom IMAP/SMTP accounts
+- **Full mailbox sync** - the initial import paginates through the entire
+  mailbox (batched Gmail API requests), with a progress panel showing fetch
+  progress; later syncs only download new mail
 - **Background sync** - periodic synchronization on a configurable interval,
-  plus manual refresh
+  plus manual refresh; new-mail notifications fire only for mail that arrives
+  after the initial import, never for imported existing mail
+- **Cancellable sign-in** - Google OAuth can be cancelled at any time
+  (Cancel Login button or closing the dialog) and times out after 2 minutes;
+  the main window stays fully usable while a sign-in is pending
 - **Local cache** - emails are cached in SQLite so the app opens instantly and
   works offline for reading
 - **Search** - full search across every account (sender, subject, body)

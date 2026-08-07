@@ -37,7 +37,7 @@ class ImapClient:
             )
         try:
             self.conn = imaplib.IMAP4_SSL(
-                account["imap_host"], int(account["imap_port"] or 993)
+                account["imap_host"], int(account["imap_port"] or 993), timeout=30
             )
             self.conn.login(self.email, password)
         except (imaplib.IMAP4.error, OSError) as e:
@@ -66,57 +66,44 @@ class ImapClient:
 
     # ------------------------------------------------------------------ fetching
 
-    def fetch_folder(
-        self, folder: str, account_id: int, max_messages: int = 50
-    ) -> list[dict]:
-        """Fetch the newest messages of a folder as message dicts."""
+    def list_uids(self, folder: str) -> list[str]:
+        """All UIDs in a folder, newest last (server order)."""
         if self._select_folder(folder, readonly=True) is None:
             log.info("Account %s has no '%s' folder", self.email, folder)
             return []
         status, data = self.conn.uid("SEARCH", None, "ALL")
         if status != "OK":
             raise ImapClientError(f"IMAP search failed in {folder}")
-        uids = data[0].split()
-        messages: list[dict] = []
-        for uid_bytes in reversed(uids[-max_messages:]):
-            uid = uid_bytes.decode()
-            status, msg_data = self.conn.uid(
-                "FETCH", uid, "(FLAGS BODY.PEEK[])"
-            )
-            if status != "OK" or not msg_data or msg_data[0] is None:
-                log.warning("Fetch failed for uid %s in %s", uid, self.email)
-                continue
-            flags = b" ".join(
-                part for part in msg_data if isinstance(part, bytes)
-            )
-            raw = b""
-            for part in msg_data:
-                if isinstance(part, tuple) and len(part) >= 2:
-                    if isinstance(part[0], bytes):
-                        flags += part[0]
-                    raw = part[1]
-                    break
-            if not raw:
-                continue
-            messages.append(
-                parse_rfc822(
-                    raw,
-                    account_id=account_id,
-                    folder=folder,
-                    uid=uid,
-                    is_read=b"\\Seen" in flags,
-                    is_starred=b"\\Flagged" in flags,
-                )
-            )
-        return messages
+        return [u.decode() for u in data[0].split()]
 
-    def list_uids(self, folder: str, max_messages: int = 50) -> list[str]:
-        if self._select_folder(folder, readonly=True) is None:
-            return []
-        status, data = self.conn.uid("SEARCH", None, "ALL")
-        if status != "OK":
-            return []
-        return [u.decode() for u in data[0].split()[-max_messages:]]
+    def fetch_message(self, folder: str, uid: str, account_id: int) -> Optional[dict]:
+        """Fetch one message by UID; the folder must already be selected."""
+        status, msg_data = self.conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[])")
+        if status != "OK" or not msg_data or msg_data[0] is None:
+            log.warning("Fetch failed for uid %s in %s", uid, self.email)
+            return None
+        flags = b" ".join(part for part in msg_data if isinstance(part, bytes))
+        raw = b""
+        for part in msg_data:
+            if isinstance(part, tuple) and len(part) >= 2:
+                if isinstance(part[0], bytes):
+                    flags += part[0]
+                raw = part[1]
+                break
+        if not raw:
+            return None
+        return parse_rfc822(
+            raw,
+            account_id=account_id,
+            folder=folder,
+            uid=uid,
+            is_read=b"\\Seen" in flags,
+            is_starred=b"\\Flagged" in flags,
+        )
+
+    def select_for_reading(self, folder: str) -> bool:
+        """Select a folder read-only prior to fetch_message calls."""
+        return self._select_folder(folder, readonly=True) is not None
 
     # --------------------------------------------------------------------- flags
 
@@ -167,7 +154,7 @@ class ImapClient:
 def verify_login(email_addr: str, password: str, host: str, port: int) -> None:
     """Try a full connect+login; raise ImapClientError with a friendly message."""
     try:
-        conn = imaplib.IMAP4_SSL(host, port)
+        conn = imaplib.IMAP4_SSL(host, port, timeout=20)
         conn.login(email_addr, password)
         conn.logout()
     except (imaplib.IMAP4.error, OSError) as e:

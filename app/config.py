@@ -46,7 +46,9 @@ _SETTINGS_FILE = "settings.json"
 DEFAULTS = {
     "sync_interval_minutes": 5,
     "notifications_enabled": True,
-    "messages_per_folder": 50,
+    # Display limit for the message list; sync itself always fetches the
+    # complete mailbox.
+    "messages_shown": 1000,
 }
 
 

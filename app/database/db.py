@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     imap_port     INTEGER,
     smtp_host     TEXT,
     smtp_port     INTEGER,
-    created_at    INTEGER NOT NULL
+    created_at    INTEGER NOT NULL,
+    initial_sync_completed  INTEGER NOT NULL DEFAULT 0,
+    last_notification_check INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS emails (
@@ -67,6 +69,18 @@ class Database:
         # Create schema once, from the constructing thread.
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Add columns introduced after the first release to existing databases."""
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(accounts)")}
+        for name in ("initial_sync_completed", "last_notification_check"):
+            if name not in cols:
+                conn.execute(
+                    f"ALTER TABLE accounts ADD COLUMN {name}"
+                    " INTEGER NOT NULL DEFAULT 0"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         conn: Optional[sqlite3.Connection] = getattr(self._local, "conn", None)
@@ -137,6 +151,22 @@ class Database:
             "SELECT * FROM accounts WHERE email = ?", (email.strip().lower(),)
         ).fetchone()
         return dict(row) if row else None
+
+    def mark_initial_sync_completed(self, account_id: int, ts: int | None = None) -> None:
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                "UPDATE accounts SET initial_sync_completed = ? WHERE id = ?",
+                (ts or int(time.time()), account_id),
+            )
+
+    def set_last_notification_check(self, account_id: int, ts: int | None = None) -> None:
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                "UPDATE accounts SET last_notification_check = ? WHERE id = ?",
+                (ts or int(time.time()), account_id),
+            )
 
     # -------------------------------------------------------------------- emails
 
@@ -275,12 +305,22 @@ class Database:
         conn = self._connect()
         with conn:
             if keep:
-                placeholders = ",".join("?" for _ in keep)
+                # A temp table sidesteps SQLite's bound-parameter limit for
+                # mailboxes with tens of thousands of messages.
                 conn.execute(
-                    f"DELETE FROM emails WHERE account_id=? AND folder=?"
-                    f" AND uid NOT IN ({placeholders})",
-                    [account_id, folder, *keep],
+                    "CREATE TEMP TABLE IF NOT EXISTS keep_uids (uid TEXT PRIMARY KEY)"
                 )
+                conn.execute("DELETE FROM keep_uids")
+                conn.executemany(
+                    "INSERT OR IGNORE INTO keep_uids VALUES (?)",
+                    [(u,) for u in keep],
+                )
+                conn.execute(
+                    "DELETE FROM emails WHERE account_id=? AND folder=?"
+                    " AND uid NOT IN (SELECT uid FROM keep_uids)",
+                    (account_id, folder),
+                )
+                conn.execute("DELETE FROM keep_uids")
             else:
                 conn.execute(
                     "DELETE FROM emails WHERE account_id=? AND folder=?",

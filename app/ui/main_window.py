@@ -15,9 +15,11 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QSystemTrayIcon,
     QTextBrowser,
     QToolBar,
@@ -59,6 +61,10 @@ class MainWindow(QMainWindow):
         self.current_email_id: int | None = None
         self._sync_worker: SyncWorker | None = None
         self._action_workers: list[RemoteActionWorker] = []
+        self._account_dialog: AccountDialog | None = None
+        # account_id -> (detail, done, total) for the live progress panel
+        self._sync_progress: dict[int, tuple[str, int, int]] = {}
+        self._panel_account_id: int | None = None
 
         self.setWindowTitle("Unified Mailbox")
         self.setWindowIcon(make_app_icon())
@@ -138,7 +144,13 @@ class MainWindow(QMainWindow):
         self.email_list.itemSelectionChanged.connect(self._on_email_selected)
         self.email_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.email_list.customContextMenuRequested.connect(self._email_context_menu)
-        splitter.addWidget(self.email_list)
+
+        # The center area is a stack: page 0 = message list, page 1 = the
+        # plain sync/loading panel shown while an account's initial import runs.
+        self.center_stack = QStackedWidget()
+        self.center_stack.addWidget(self.email_list)
+        self.center_stack.addWidget(self._build_sync_panel())
+        splitter.addWidget(self.center_stack)
 
         # -- Preview panel
         preview = QWidget()
@@ -176,6 +188,33 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 5)
         splitter.setStretchFactor(2, 4)
         splitter.setSizes([220, 620, 360])
+
+    def _build_sync_panel(self) -> QWidget:
+        panel = QWidget()
+        outer = QVBoxLayout(panel)
+        outer.addStretch(2)
+
+        inner = QVBoxLayout()
+        inner.setSpacing(8)
+        self.sync_account_label = QLabel("")
+        self.sync_account_label.setObjectName("heading")
+        self.sync_account_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sync_status_label = QLabel("Syncing mailbox...")
+        self.sync_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sync_bar = QProgressBar()
+        self.sync_bar.setFixedWidth(320)
+        self.sync_bar.setTextVisible(False)
+        self.sync_detail_label = QLabel("")
+        self.sync_detail_label.setObjectName("secondary")
+        self.sync_detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        inner.addWidget(self.sync_account_label)
+        inner.addWidget(self.sync_status_label)
+        inner.addWidget(self.sync_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
+        inner.addWidget(self.sync_detail_label)
+        outer.addLayout(inner)
+        outer.addStretch(3)
+        return panel
 
     # --------------------------------------------------------------------- tray
 
@@ -273,6 +312,7 @@ class MainWindow(QMainWindow):
             account_id=self.current_account_id,
             starred_only=starred,
             search=search,
+            limit=int(self.settings.get("messages_shown")),
         )
 
         self.email_list.blockSignals(True)
@@ -302,6 +342,64 @@ class MainWindow(QMainWindow):
         self.email_list.blockSignals(False)
         n = len(emails)
         self.statusBar().showMessage(f"{n} message{'s' if n != 1 else ''}")
+        self._refresh_center_page(n)
+
+    def _refresh_center_page(self, email_count: int) -> None:
+        """Choose between the message list and the sync/loading panel.
+
+        The panel is shown while looking at an account whose initial import
+        has not completed, or on a unified inbox that is empty only because
+        the first account is still importing.
+        """
+        pending = {
+            a["id"]: a
+            for a in self.db.get_accounts()
+            if not a["initial_sync_completed"]
+        }
+        account = None
+        if self.current_account_id in pending:
+            account = pending[self.current_account_id]
+        elif (
+            email_count == 0
+            and pending
+            and self.current_view == "inbox"
+            and self.current_account_id is None
+            and not self.search_edit.text().strip()
+        ):
+            account = next(iter(pending.values()))
+        if account is None:
+            self._panel_account_id = None
+            self.center_stack.setCurrentIndex(0)
+            return
+        self._panel_account_id = account["id"]
+        self._update_sync_panel(account)
+        self.center_stack.setCurrentIndex(1)
+
+    def _update_sync_panel(self, account: dict) -> None:
+        self.sync_account_label.setText(account["email"])
+        progress = self._sync_progress.get(account["id"])
+        syncing = self._sync_worker is not None and self._sync_worker.isRunning()
+        if progress:
+            detail, done, total = progress
+            self.sync_status_label.setText("Syncing mailbox...")
+            self.sync_detail_label.setText(
+                f"{detail}  ({done}/{total})" if total else detail
+            )
+            if total:
+                self.sync_bar.setRange(0, total)
+                self.sync_bar.setValue(done)
+            else:
+                self.sync_bar.setRange(0, 0)  # busy indicator
+        elif syncing:
+            self.sync_status_label.setText("Syncing mailbox...")
+            self.sync_detail_label.setText("Fetching emails...")
+            self.sync_bar.setRange(0, 0)
+        else:
+            self.sync_status_label.setText("Loading mailbox...")
+            self.sync_detail_label.setText(
+                "Fetching emails - preparing search index..."
+            )
+            self.sync_bar.setRange(0, 0)
 
     @staticmethod
     def _format_time(ts: int) -> str:
@@ -445,23 +543,49 @@ class MainWindow(QMainWindow):
         if not self.db.get_accounts():
             self.statusBar().showMessage("Add an account to start syncing")
             return
-        self._sync_worker = SyncWorker(
-            self.db.path, int(self.settings.get("messages_per_folder"))
-        )
+        self._sync_worker = SyncWorker(self.db.path)
         self._sync_worker.progress.connect(self.statusBar().showMessage)
+        self._sync_worker.account_progress.connect(self._on_account_progress)
+        self._sync_worker.account_finished.connect(self._on_account_finished)
         self._sync_worker.account_failed.connect(
             lambda err: self.statusBar().showMessage(f"Sync error - {err}")
         )
         self._sync_worker.finished_sync.connect(self._on_sync_finished)
         self._sync_worker.start()
 
+    def _on_account_progress(
+        self, account_id: int, detail: str, done: int, total: int
+    ) -> None:
+        self._sync_progress[account_id] = (detail, done, total)
+        if self._panel_account_id == account_id:
+            account = self.db.get_account(account_id)
+            if account:
+                self._update_sync_panel(account)
+
+    def _on_account_finished(
+        self, account_id: int, imported: int, was_initial: bool
+    ) -> None:
+        self._sync_progress.pop(account_id, None)
+        # Reload so a finished initial import replaces its loading panel
+        # with the populated list immediately. The reload writes its own
+        # status text, so the completion message goes up afterwards.
+        self.reload_sidebar()
+        self.reload_email_list()
+        if was_initial:
+            plural = "s" if imported != 1 else ""
+            self.statusBar().showMessage(
+                f"Mailbox ready - imported {imported} existing email{plural}"
+            )
+
     def _on_sync_finished(self, new_count: int) -> None:
-        self.statusBar().showMessage(
-            f"Sync complete - {new_count} new message{'s' if new_count != 1 else ''}"
-            if new_count else "Sync complete"
-        )
+        self._sync_progress.clear()
         self.reload_email_list()
         self.reload_sidebar()
+        if new_count:
+            plural = "s" if new_count != 1 else ""
+            self.statusBar().showMessage(
+                f"Sync complete - {new_count} new message{plural}"
+            )
         self.notifier.notify_new_mail(new_count)
 
     # ------------------------------------------------------------------ dialogs
@@ -478,9 +602,27 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def open_add_account(self) -> None:
+        # Non-modal so a running Google sign-in never blocks the main window.
+        if self._account_dialog is not None:
+            self._account_dialog.raise_()
+            self._account_dialog.activateWindow()
+            return
         dialog = AccountDialog(self.manager, self)
-        if dialog.exec() and dialog.added_account:
+        dialog.finished.connect(lambda _: self._on_account_dialog_done(dialog))
+        self._account_dialog = dialog
+        dialog.show()
+
+    def _on_account_dialog_done(self, dialog: AccountDialog) -> None:
+        self._account_dialog = None
+        account = dialog.added_account
+        dialog.deleteLater()
+        if account:
+            # Jump straight to the new account: its initial import shows the
+            # progress panel instead of an empty inbox.
+            self.current_view = "inbox"
+            self.current_account_id = account["id"]
             self.reload_sidebar()
+            self.reload_email_list()
             self.start_sync()
 
     def open_settings(self) -> None:
@@ -496,6 +638,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         # Stop background timers; let running workers finish quickly.
         self._sync_timer.stop()
+        if self._account_dialog is not None:
+            self._account_dialog.shutdown()
+            self._account_dialog.close()
         if self._sync_worker is not None and self._sync_worker.isRunning():
             self._sync_worker.wait(3000)
         for worker in list(self._action_workers):

@@ -26,19 +26,34 @@ log = logging.getLogger(__name__)
 
 
 class _GmailAuthWorker(QThread):
-    """Runs the blocking OAuth browser flow off the UI thread."""
+    """Runs the blocking OAuth browser flow off the UI thread.
+
+    cancel() may be called from the UI thread at any time; the flow's
+    localhost callback server shuts down within its poll interval and the
+    thread exits via the cancelled signal.
+    """
 
     succeeded = Signal(dict)
     failed = Signal(str)
+    cancelled = Signal()
 
     def __init__(self, manager: AccountManager, parent=None):
         super().__init__(parent)
         self.manager = manager
+        self.flow = gmail_oauth.CancellableOAuthFlow(timeout_seconds=120)
+
+    def cancel(self) -> None:
+        self.flow.cancel()
 
     def run(self) -> None:
         try:
-            account = self.manager.add_gmail_account()
+            creds = self.flow.run()
+            account = self.manager.register_gmail_account(creds)
             self.succeeded.emit(account)
+        except gmail_oauth.OAuthCancelled:
+            self.cancelled.emit()
+        except gmail_oauth.OAuthTimeout:
+            self.failed.emit("Google sign-in timed out")
         except (AccountError, gmail_oauth.GmailAuthError) as e:
             self.failed.emit(str(e))
         except Exception as e:
@@ -102,8 +117,11 @@ class AccountDialog(QDialog):
         )
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Add Account")
         self.buttons.accepted.connect(self._on_add)
+        # rejected fires for the Cancel button and Esc; reject() is overridden
+        # to turn it into "Cancel Login" while OAuth is running.
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+        self._close_after_cancel = False
 
     # ------------------------------------------------------------------ pages
 
@@ -167,10 +185,43 @@ class AccountDialog(QDialog):
     # ----------------------------------------------------------------- actions
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
-        self.buttons.setEnabled(not busy)
+        ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel = self.buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        ok.setEnabled(not busy)
+        # The Cancel button stays enabled while busy and becomes the way to
+        # abort a running Google sign-in.
+        cancel.setText("Cancel Login" if busy else "Cancel")
         self.type_combo.setEnabled(not busy)
         self.stack.setEnabled(not busy)
         self.status_label.setText(message)
+
+    def _oauth_running(self) -> bool:
+        return self._worker is not None and self._worker.isRunning()
+
+    def _request_cancel(self) -> None:
+        """Ask the running worker to stop; UI resets when it confirms."""
+        if isinstance(self._worker, _GmailAuthWorker):
+            self._worker.cancel()
+            self.status_label.setText("Cancelling sign-in...")
+        else:
+            # IMAP verification has a 20 s socket timeout; just let it finish.
+            self.status_label.setText("Finishing connection attempt...")
+
+    def reject(self) -> None:
+        """Cancel button / Esc: abort a running sign-in instead of closing."""
+        if self._oauth_running():
+            self._request_cancel()
+            return
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        """X button: cancel any running sign-in, then close - never the app."""
+        if self._oauth_running():
+            self._close_after_cancel = True
+            self._request_cancel()
+            event.ignore()
+            return
+        event.accept()
 
     def _on_add(self) -> None:
         if self.type_combo.currentIndex() == 0:
@@ -206,6 +257,8 @@ class AccountDialog(QDialog):
 
         self._worker.succeeded.connect(self._on_success)
         self._worker.failed.connect(self._on_failure)
+        if isinstance(self._worker, _GmailAuthWorker):
+            self._worker.cancelled.connect(self._on_cancelled)
         self._worker.start()
 
     def _on_success(self, account: dict) -> None:
@@ -214,4 +267,18 @@ class AccountDialog(QDialog):
 
     def _on_failure(self, message: str) -> None:
         self._set_busy(False)
-        QMessageBox.critical(self, "Could not add account", message)
+        QMessageBox.warning(self, "Could not add account", message)
+        if self._close_after_cancel:
+            super().reject()
+
+    def _on_cancelled(self) -> None:
+        self._set_busy(False, "Sign-in cancelled.")
+        if self._close_after_cancel:
+            super().reject()
+
+    def shutdown(self) -> None:
+        """Cancel any running worker and wait for it (used on app exit)."""
+        if self._worker is not None and self._worker.isRunning():
+            if isinstance(self._worker, _GmailAuthWorker):
+                self._worker.cancel()
+            self._worker.wait(5000)
