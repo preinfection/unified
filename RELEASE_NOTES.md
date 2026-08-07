@@ -92,6 +92,12 @@ First public release.
     itself is never corrupted (SQLite WAL is crash-safe) and sync simply
     resumes on the next launch, with the app noting that it recovered from
     an interrupted session.
+- **Logging**: the developer console and `logs/app.log` never write OAuth
+  tokens, passwords, client secrets, message subjects/bodies, or
+  attachment names. Account activity is logged by a purely local numeric
+  ID (e.g. "Account 3: sync started"), not by email address, so sharing a
+  log file for troubleshooting does not reveal which accounts are
+  connected.
 
 ## Install instructions
 
@@ -158,3 +164,9 @@ Before this release, the following was verified against the actual built
   relaunch the app reported "Recovered mailbox from an interrupted
   previous session," the database passed its integrity check with no
   corruption or duplicate rows, and sync resumed normally
+- Privacy audit: every tracked file (current state and full git history)
+  was searched for real email addresses, OAuth tokens, API keys, and
+  local file paths - none found; the packaged `dist\Unified` folder was
+  scanned for stray database/credential/log/temp files - none found; and
+  every logging call site in the source was audited for account email
+  addresses, fixed to use a local numeric ID instead where any were found
