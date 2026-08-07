@@ -155,14 +155,14 @@ def load_credentials(email: str) -> Optional[Credentials]:
     try:
         creds = Credentials.from_authorized_user_info(json.loads(raw), SCOPES)
     except ValueError as e:
-        log.error("Stored Gmail token for %s is invalid: %s", email, e)
+        log.error("Stored Gmail token is invalid: %s", e)
         return None
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
             save_token(email, creds)
         except Exception as e:  # network or revoked token
-            log.error("Token refresh failed for %s: %s", email, e)
+            log.error("Token refresh failed: %s", e)
             return None
     return creds
 

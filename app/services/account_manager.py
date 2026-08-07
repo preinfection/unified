@@ -35,7 +35,7 @@ class AccountManager:
             raise AccountError(f"{email_addr} is already added.")
         gmail_oauth.save_token(email_addr, creds)
         account_id = self.db.add_account(email=email_addr, provider="gmail")
-        log.info("Added Gmail account %s (id=%s)", email_addr, account_id)
+        log.info("Added Gmail account (id=%s)", account_id)
         return self.db.get_account(account_id)
 
     # ---------------------------------------------------------------------- imap
@@ -67,7 +67,7 @@ class AccountManager:
             smtp_host=smtp_host,
             smtp_port=smtp_port,
         )
-        log.info("Added IMAP account %s (id=%s)", email_addr, account_id)
+        log.info("Added IMAP account (id=%s)", account_id)
         return self.db.get_account(account_id)
 
     # -------------------------------------------------------------------- remove
@@ -83,4 +83,4 @@ class AccountManager:
                 secrets_store.KIND_IMAP_PASSWORD, account["email"]
             )
         self.db.remove_account(account_id)
-        log.info("Removed account %s", account["email"])
+        log.info("Removed account %s", account["id"])

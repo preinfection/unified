@@ -29,7 +29,7 @@ class GmailClient:
         creds = gmail_oauth.load_credentials(email_address)
         if creds is None:
             raise GmailClientError(
-                f"No valid Gmail credentials for {email_address}; re-add the account."
+                "No valid Gmail credentials for this account; re-add it."
             )
         # cache_discovery=False avoids oauth2client-era file cache warnings.
         self.service = build("gmail", "v1", credentials=creds, cache_discovery=False)

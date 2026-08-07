@@ -35,7 +35,7 @@ def get_secret(kind: str, email: str) -> Optional[str]:
     try:
         return keyring.get_password(SERVICE, _key(kind, email))
     except keyring.errors.KeyringError as e:
-        log.error("Keyring read failed for %s: %s", email, e)
+        log.error("Keyring read failed (%s): %s", kind, e)
         return None
 
 
@@ -48,7 +48,7 @@ def get_legacy_secret(kind: str, email: str) -> Optional[str]:
     try:
         return keyring.get_password(LEGACY_APP_NAME, _key(kind, email))
     except keyring.errors.KeyringError as e:
-        log.error("Legacy keyring read failed for %s: %s", email, e)
+        log.error("Legacy keyring read failed (%s): %s", kind, e)
         return None
 
 

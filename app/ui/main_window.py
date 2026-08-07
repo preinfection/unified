@@ -173,8 +173,8 @@ class MainWindow(QMainWindow):
                     else secrets_store.KIND_IMAP_PASSWORD)
             if not secrets_store.get_secret(kind, account["email"]):
                 log.warning(
-                    "%s: no stored sign-in found - remove and re-add this "
-                    "account", account["email"],
+                    "Account %s: no stored sign-in found - remove and "
+                    "re-add this account", account["id"],
                 )
 
     # ------------------------------------------------------------------ toolbar

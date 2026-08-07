@@ -120,7 +120,7 @@ class AccountSyncWorker(QThread):
                 result["error"] = "account removed"
                 return
             result["was_initial"] = not account["initial_sync_completed"]
-            log.info("%s: sync started", account["email"])
+            log.info("Account %s: sync started", account["id"])
             self.progress.emit(account["id"], PH_CONNECT, 0, 0)
             if account["provider"] == "gmail":
                 folder_counts = self._sync_gmail(db, account, result)
@@ -128,7 +128,7 @@ class AccountSyncWorker(QThread):
                 folder_counts = self._sync_imap(db, account, result)
             if self._stopped():
                 result["cancelled"] = True
-                log.info("%s: sync cancelled", account["email"])
+                log.info("Account %s: sync cancelled", account["id"])
                 return
 
             # ---- Verifying: never claim complete without matching counts.
@@ -140,15 +140,15 @@ class AccountSyncWorker(QThread):
                 result["failed"] += max(0, server_count - local)
             now = int(time.time())
             log.info(
-                "%s: verify - server %d, local %d, failed %d",
-                account["email"], result["server_total"],
+                "Account %s: verify - server %d, local %d, failed %d",
+                account["id"], result["server_total"],
                 result["local_total"], result["failed"],
             )
             if result["failed"] == 0 and result["was_initial"]:
                 db.mark_initial_sync_completed(account["id"], now)
             db.set_last_notification_check(account["id"], now)
-            log.info("%s: sync finished (%d imported, %d failed)",
-                     account["email"], result["imported"], result["failed"])
+            log.info("Account %s: sync finished (%d imported, %d failed)",
+                     account["id"], result["imported"], result["failed"])
         except Exception as e:
             reason = friendly_error(e)
             log.error("Sync failed for account %s: %s", self.account_id, reason)
@@ -184,8 +184,8 @@ class AccountSyncWorker(QThread):
             ids = client.list_all_message_ids(
                 folder,
                 on_page=lambda n, f=folder: (
-                    log.info("%s: %s list - %d ids so far",
-                             account["email"], f, n),
+                    log.info("Account %s: %s list - %d ids so far",
+                             aid, f, n),
                     self.progress.emit(aid, PH_LIST, n, 0),
                 ),
             )
@@ -193,8 +193,8 @@ class AccountSyncWorker(QThread):
             existing = set(db.get_folder_uids(aid, folder))
             new_ids = [i for i in ids if i not in existing]
             total = len(new_ids)
-            log.info("%s: %s - %d on server, %d new",
-                     account["email"], folder, len(ids), total)
+            log.info("Account %s: %s - %d on server, %d new",
+                     aid, folder, len(ids), total)
 
             done = 0
             pending: list[dict] = []
@@ -218,8 +218,8 @@ class AccountSyncWorker(QThread):
             self.progress.emit(aid, PH_INDEX, 0, 0)
             db.replace_folder_uids(aid, folder, ids)
             if failed_ids:
-                log.warning("%s: %s - %d messages failed to download",
-                            account["email"], folder, len(failed_ids))
+                log.warning("Account %s: %s - %d messages failed to download",
+                            aid, folder, len(failed_ids))
 
         self._backfill_gmail_bodies(db, client, account)
         return folder_counts
@@ -231,7 +231,7 @@ class AccountSyncWorker(QThread):
         uids = db.get_missing_body_uids(aid, "inbox", BODY_BACKFILL_LIMIT)
         if not uids or self._stopped():
             return
-        log.info("%s: downloading %d missing bodies", account["email"], len(uids))
+        log.info("Account %s: downloading %d missing bodies", aid, len(uids))
         total = len(uids)
         done = 0
         pending: list[dict] = []
@@ -268,8 +268,8 @@ class AccountSyncWorker(QThread):
                 existing = set(db.get_folder_uids(aid, folder))
                 new_uids = [u for u in uids if u not in existing]
                 total = len(new_uids)
-                log.info("%s: %s - %d on server, %d new",
-                         account["email"], folder, len(uids), total)
+                log.info("Account %s: %s - %d on server, %d new",
+                         aid, folder, len(uids), total)
 
                 pending: list[dict] = []
                 if new_uids and client.select_for_reading(folder):
@@ -495,6 +495,6 @@ class RemoteActionWorker(QThread):
                 finally:
                     imap.close()
         except Exception as e:
-            log.error("Remote %s failed for %s: %s",
-                      self.action, self.account["email"], e)
+            log.error("Remote %s failed for account %s: %s",
+                      self.action, self.account["id"], e)
             self.failed.emit(str(e))

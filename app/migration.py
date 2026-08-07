@@ -71,11 +71,11 @@ def _migrate_secrets(db_path) -> None:
             secret = secrets_store.get_legacy_secret(kind, account["email"])
             if secret:
                 secrets_store.set_secret(kind, account["email"], secret)
-                log.info("Migrated sign-in for %s", account["email"])
+                log.info("Migrated sign-in for account %s", account["id"])
             else:
                 log.warning(
-                    "No legacy sign-in found for %s - it will need to be "
-                    "re-added", account["email"],
+                    "No legacy sign-in found for account %s - it will need "
+                    "to be re-added", account["id"],
                 )
     finally:
         db.close()

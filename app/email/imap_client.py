@@ -33,7 +33,7 @@ class ImapClient:
         )
         if not password:
             raise ImapClientError(
-                f"No stored password for {self.email}; re-add the account."
+                f"No stored password for account {account['id']}; re-add it."
             )
         try:
             self.conn = imaplib.IMAP4_SSL(
@@ -41,7 +41,9 @@ class ImapClient:
             )
             self.conn.login(self.email, password)
         except (imaplib.IMAP4.error, OSError) as e:
-            raise ImapClientError(f"IMAP connection failed for {self.email}: {e}") from e
+            raise ImapClientError(
+                f"IMAP connection failed for account {account['id']}: {e}"
+            ) from e
         self._selected: Optional[str] = None
 
     def close(self) -> None:
@@ -69,7 +71,7 @@ class ImapClient:
     def list_uids(self, folder: str) -> list[str]:
         """All UIDs in a folder, newest last (server order)."""
         if self._select_folder(folder, readonly=True) is None:
-            log.info("Account %s has no '%s' folder", self.email, folder)
+            log.info("Account %s has no '%s' folder", self.account["id"], folder)
             return []
         status, data = self.conn.uid("SEARCH", None, "ALL")
         if status != "OK":
@@ -80,7 +82,8 @@ class ImapClient:
         """Fetch headers/flags only (fast metadata pass); folder pre-selected."""
         status, msg_data = self.conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[HEADER])")
         if status != "OK" or not msg_data or msg_data[0] is None:
-            log.warning("Header fetch failed for uid %s in %s", uid, self.email)
+            log.warning("Header fetch failed for uid %s in account %s",
+                       uid, self.account["id"])
             return None
         flags = b" ".join(part for part in msg_data if isinstance(part, bytes))
         raw = b""
@@ -105,7 +108,8 @@ class ImapClient:
         """Fetch one full message by UID; the folder must already be selected."""
         status, msg_data = self.conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[])")
         if status != "OK" or not msg_data or msg_data[0] is None:
-            log.warning("Fetch failed for uid %s in %s", uid, self.email)
+            log.warning("Fetch failed for uid %s in account %s",
+                       uid, self.account["id"])
             return None
         flags = b" ".join(part for part in msg_data if isinstance(part, bytes))
         raw = b""
@@ -173,7 +177,8 @@ class ImapClient:
                     return
             except imaplib.IMAP4.error:
                 continue
-        log.info("Could not append to a Sent folder for %s", self.email)
+        log.info("Could not append to a Sent folder for account %s",
+                self.account["id"])
 
 
 def verify_login(email_addr: str, password: str, host: str, port: int) -> None:
