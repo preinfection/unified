@@ -19,6 +19,9 @@ credentials.json
 client_secret*.json
 token*.json
 *.db
+*.db.enc
+*.db.enc.locked-*
+key.bin
 *.log
 
 # IDE

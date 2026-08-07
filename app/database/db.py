@@ -110,6 +110,21 @@ class Database:
             conn.close()
             self._local.conn = None
 
+    def checkpoint_and_close(self) -> None:
+        """Flush the WAL into the main file before closing.
+
+        Required before encrypting the database file at rest: WAL mode can
+        leave recently committed writes sitting in a separate -wal file, so
+        encrypting mailbox.db alone (without this) would silently capture a
+        stale snapshot and then discard the WAL, losing those writes.
+        """
+        conn = self._connect()
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error as e:
+            log.warning("WAL checkpoint before close failed: %s", e)
+        self.close()
+
     # ------------------------------------------------------------------ accounts
 
     def add_account(

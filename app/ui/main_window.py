@@ -69,6 +69,7 @@ from app.ui.compose_dialog import ComposeDialog
 from app.ui.console import ConsoleWidget
 from app.ui.html_view import HtmlMailView
 from app.ui.icons import make_app_icon
+from app.ui.native_theme import apply_white_titlebar
 from app.ui.settings_dialog import SettingsDialog
 
 log = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Unified")
         self.setWindowIcon(make_app_icon())
         self.resize(1200, 760)
+        apply_white_titlebar(self)
 
         self._build_toolbar()
         self._build_body()
@@ -465,7 +467,15 @@ class MainWindow(QMainWindow):
         elif kind == "settings":
             self.open_settings()
             return
+        self._update_search_placeholder()
         self.reload_email_list()
+
+    def _update_search_placeholder(self) -> None:
+        """Search always scopes to whatever is currently shown: a single
+        account's inbox, or every account combined."""
+        text = "Search inbox..." if self.current_account_id is not None \
+            else "Search all accounts..."
+        self.search_edit.setPlaceholderText(text)
 
     # --------------------------------------------------------------- email list
 
@@ -910,6 +920,7 @@ class MainWindow(QMainWindow):
             # accounts are mid-sync (shows Waiting/progress, never empty).
             self.current_view = "inbox"
             self.current_account_id = account["id"]
+            self._update_search_placeholder()
             self.reload_sidebar()
             self.reload_email_list()
             self.sync.request_sync([account["id"]])

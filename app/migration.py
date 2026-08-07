@@ -27,8 +27,13 @@ _FILES_TO_COPY = ("mailbox.db", "settings.json", "google_credentials.json")
 
 def migrate_legacy_install() -> None:
     new_dir = config.app_data_dir()
-    if (new_dir / "mailbox.db").exists():
-        return  # already migrated, or a fresh install of the new name
+    # A plaintext db means migration already ran (or this is a fresh install
+    # of the new name); an encrypted one means it ran and the app has since
+    # exited cleanly at least once. Either way, never re-migrate - re-running
+    # against a since-modified new install would re-copy stale legacy data
+    # over it.
+    if (new_dir / "mailbox.db").exists() or (new_dir / "mailbox.db.enc").exists():
+        return
 
     old_dir = config.legacy_app_data_dir()
     old_db = old_dir / "mailbox.db"

@@ -17,18 +17,43 @@ ICON = ROOT / "assets" / "icon.ico"
 
 
 def generate_icon() -> None:
-    """Render the programmatic app icon to a .ico for the exe resource."""
+    """Build a proper multi-resolution .ico for the exe's Windows resource.
+
+    A single 256px image saved with an .ico extension only ever contains
+    that one size - Explorer/the taskbar then has to scale it down
+    themselves for small contexts, which is exactly what makes app icons
+    go blurry or vanish at 16-24px. Each size here is rendered by
+    app.ui.icons at its own resolution (proportional stroke width, not a
+    scaled-down large one) and assembled into one real multi-size .ico.
+    """
+    import io
+
+    from PIL import Image
+    from PySide6.QtCore import QBuffer, QIODevice
     from PySide6.QtGui import QGuiApplication
 
     app = QGuiApplication.instance() or QGuiApplication(
         [sys.argv[0], "-platform", "offscreen"]
     )
-    from app.ui.icons import make_app_icon
+    from app.ui.icons import ICON_SIZES, _draw_icon
 
     ICON.parent.mkdir(exist_ok=True)
-    pixmap = make_app_icon(256).pixmap(256, 256)
-    if not pixmap.save(str(ICON), "ICO"):
-        raise RuntimeError("Could not write assets/icon.ico")
+
+    images = []
+    for size in ICON_SIZES:
+        pixmap = _draw_icon(size)
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.ReadWrite)
+        pixmap.save(buf, "PNG")
+        images.append(Image.open(io.BytesIO(bytes(buf.data()))).convert("RGBA"))
+        buf.close()
+
+    largest = images[-1]
+    largest.save(
+        str(ICON), format="ICO",
+        sizes=[(im.width, im.height) for im in images],
+        append_images=images[:-1],
+    )
     del app
 
 
@@ -45,6 +70,11 @@ def build() -> int:
         # Keyring discovers its Windows backend at runtime.
         "--hidden-import", "keyring.backends.Windows",
         "--hidden-import", "win32ctypes.core",
+        # DPAPI (database encryption key) and its dependency chain.
+        "--hidden-import", "win32crypt",
+        "--hidden-import", "win32timezone",
+        # cryptography's compiled backend is not always auto-detected.
+        "--collect-all", "cryptography",
         str(ROOT / "run.py"),
     ]
     print(" ".join(args))

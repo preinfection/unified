@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app import config
+from app import APP_NAME, __version__, config
 from app.services.account_manager import AccountManager
 
 log = logging.getLogger(__name__)
@@ -94,6 +94,10 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        version_label = QLabel(f"{APP_NAME} v{__version__}")
+        version_label.setObjectName("secondary")
+        layout.addWidget(version_label)
 
     def _update_google_label(self) -> None:
         if config.google_client_secrets_path().exists():

@@ -134,3 +134,25 @@ def test_already_migrated_is_a_noop(appdata_dirs):
     # A second run must not re-copy (the new db already has data).
     migration.migrate_legacy_install()
     assert (new / "mailbox.db").stat().st_mtime == new_db_mtime
+
+
+def test_already_migrated_and_encrypted_is_a_noop(appdata_dirs):
+    """After a clean exit, mailbox.db is encrypted and the plaintext file
+    is gone - migration must recognize that as 'already migrated' too,
+    not mistake the encrypted-only state for a fresh legacy copy needed."""
+    from app.security import crypto_store
+
+    legacy, new = appdata_dirs
+    legacy_db = Database(legacy / "mailbox.db")
+    legacy_db.add_account("a@gmail.com", "gmail")
+    legacy_db.close()
+
+    migration.migrate_legacy_install()
+    crypto_store.lock_database(new)  # simulate a clean app exit
+    assert not (new / "mailbox.db").exists()
+    assert (new / "mailbox.db.enc").exists()
+
+    # A second launch must not re-copy the legacy database over the
+    # encrypted one, and must not re-create a plaintext mailbox.db.
+    migration.migrate_legacy_install()
+    assert not (new / "mailbox.db").exists()
