@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Build output
+build/
+dist/
+*.spec
+
+# Test / tooling caches
+.pytest_cache/
+.coverage
+
+# Local data - never commit credentials or tokens
+credentials.json
+client_secret*.json
+token*.json
+*.db
+*.log
+
+# IDE
+.idea/
+.vscode/
