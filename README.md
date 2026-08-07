@@ -1,9 +1,10 @@
-# Unified Mailbox
+# Unified
 
 A lightweight Windows desktop email client that combines multiple email
-accounts into one unified inbox. Built with Python, PySide6 and SQLite.
+accounts into one inbox. Built with Python, PySide6 and SQLite - simple,
+black-and-white, and fast even at 20,000+ cached messages.
 
-![Unified Mailbox main window](assets/screenshot.png)
+![Unified main window](assets/screenshot.png)
 
 ## Features
 
@@ -70,7 +71,7 @@ accounts into one unified inbox. Built with Python, PySide6 and SQLite.
 
 ```powershell
 git clone <this repo>
-cd UnifiedMailbox
+cd Unified
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python run.py
@@ -94,7 +95,7 @@ OAuth client. One-time setup:
    own address as a test user).
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
    type **Desktop app** → download the `credentials.json`.
-5. In Unified Mailbox: **Settings → Select credentials.json…** and pick the file.
+5. In Unified: **Settings → Select credentials.json…** and pick the file.
 6. **+ Add account… → Gmail** - a browser window opens for Google sign-in.
 
 Your Google password is never seen by the app; only the OAuth token is stored,
@@ -115,9 +116,9 @@ use an app password.
 .venv\Scripts\python build.py
 ```
 
-The build output is `dist\UnifiedMailbox\UnifiedMailbox.exe`. The whole
-`dist\UnifiedMailbox` folder is the installation - copy it anywhere and run
-the exe. User data is kept in `%APPDATA%\UnifiedMailbox`.
+The build output is `dist\Unified\Unified.exe`. The whole `dist\Unified`
+folder is the installation - copy it anywhere and run the exe. User data is
+kept in `%APPDATA%\Unified`.
 
 ## Running tests
 
@@ -128,7 +129,7 @@ the exe. User data is kept in `%APPDATA%\UnifiedMailbox`.
 ## Project structure
 
 ```
-UnifiedMailbox/
+Unified/
 ├── app/
 │   ├── ui/            # PySide6 widgets: main window, dialogs, stylesheet
 │   ├── database/      # SQLite storage (accounts + cached emails)
@@ -136,10 +137,11 @@ UnifiedMailbox/
 │   ├── auth/          # OAuth2 flow and OS-keyring secret storage
 │   ├── services/      # account manager, background sync, notifications
 │   ├── config.py      # paths and user settings (%APPDATA%)
+│   ├── migration.py   # one-time carry-over from older installs
 │   ├── logging_setup.py
 │   └── main.py        # application entry point
-├── assets/            # generated icon
-├── tests/             # pytest suite (database, MIME parsing)
+├── assets/            # icon + screenshot for the repo/README
+├── tests/             # pytest suite
 ├── build.py           # PyInstaller build script
 ├── run.py             # launcher
 ├── requirements.txt
@@ -154,8 +156,24 @@ UnifiedMailbox/
 - Gmail access uses the official Gmail API with the `gmail.modify` and
   `gmail.send` scopes.
 - IMAP connections use SSL; SMTP uses SSL or STARTTLS.
-- The local SQLite cache (`%APPDATA%\UnifiedMailbox\mailbox.db`) contains
-  message bodies - it stays on your machine and is excluded from git.
+- The local SQLite cache (`%APPDATA%\Unified\mailbox.db`) contains message
+  bodies - it stays on your machine and is excluded from git.
+
+## Repo image
+
+`assets/social-preview.png` (1280×640, GitHub's recommended size) is ready
+to upload as this repo's social preview: **Settings → General → Social
+preview → Edit → Upload an image**. It's what shows up when the repo link
+is shared, e.g. on social media or in Slack.
+
+## Note for existing installs
+
+This project was previously named "UnifiedMailbox". On first launch, the new
+build automatically copies data from the old `%APPDATA%\UnifiedMailbox`
+folder (database, settings, and each account's stored sign-in) into
+`%APPDATA%\Unified`, so existing accounts keep working without a re-sync or
+re-login. The old folder is left untouched as a backup - delete it manually
+once you've confirmed everything migrated.
 
 ## License
 

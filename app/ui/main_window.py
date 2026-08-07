@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
         self._panel_account_id: int | None = None
         self._extra_limit = 0  # raised by the Load More button
 
-        self.setWindowTitle("Unified Mailbox")
+        self.setWindowTitle("Unified")
         self.setWindowIcon(make_app_icon())
         self.resize(1200, 760)
 
@@ -333,7 +333,7 @@ class MainWindow(QMainWindow):
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(make_app_icon(), self)
-        self.tray.setToolTip("Unified Mailbox")
+        self.tray.setToolTip("Unified")
         menu = QMenu()
         show_action = QAction("Open", menu)
         show_action.triggered.connect(self._show_from_tray)

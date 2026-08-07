@@ -74,7 +74,7 @@ class HtmlMailView(QTextBrowser):
     def _fetch(self, url: str) -> None:
         try:
             req = urllib.request.Request(
-                url, headers={"User-Agent": "UnifiedMailbox/1.0"}
+                url, headers={"User-Agent": "Unified/1.0"}
             )
             with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
                 data = resp.read(_MAX_IMAGE_BYTES + 1)

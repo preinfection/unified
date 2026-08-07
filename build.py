@@ -3,7 +3,7 @@
 Usage (from the project root, inside the virtualenv):
     python build.py
 
-Output: dist/UnifiedMailbox/UnifiedMailbox.exe
+Output: dist/Unified/Unified.exe
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def build() -> int:
         "--noconfirm",
         "--clean",
         "--windowed",                       # no console window
-        "--name", "UnifiedMailbox",
+        "--name", "Unified",
         "--icon", str(ICON),
         # Google API client ships bundled discovery documents as data files.
         "--collect-data", "googleapiclient",
@@ -55,6 +55,6 @@ if __name__ == "__main__":
     generate_icon()
     code = build()
     if code == 0:
-        exe = ROOT / "dist" / "UnifiedMailbox" / "UnifiedMailbox.exe"
+        exe = ROOT / "dist" / "Unified" / "Unified.exe"
         print(f"\nBuild OK: {exe}")
     sys.exit(code)

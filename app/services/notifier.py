@@ -22,7 +22,7 @@ class Notifier:
             return
         plural = "s" if count != 1 else ""
         self.tray.showMessage(
-            "UnifiedMailbox",
+            "Unified",
             f"{count} new email{plural} received",
             QSystemTrayIcon.MessageIcon.Information,
             5000,

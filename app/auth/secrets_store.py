@@ -13,9 +13,11 @@ from typing import Optional
 import keyring
 import keyring.errors
 
+from app.config import LEGACY_APP_NAME
+
 log = logging.getLogger(__name__)
 
-SERVICE = "UnifiedMailbox"
+SERVICE = "Unified"
 
 KIND_GMAIL_TOKEN = "gmail-token"
 KIND_IMAP_PASSWORD = "imap-password"
@@ -34,6 +36,19 @@ def get_secret(kind: str, email: str) -> Optional[str]:
         return keyring.get_password(SERVICE, _key(kind, email))
     except keyring.errors.KeyringError as e:
         log.error("Keyring read failed for %s: %s", email, e)
+        return None
+
+
+def get_legacy_secret(kind: str, email: str) -> Optional[str]:
+    """Read a secret stored under the app's pre-rename service name.
+
+    Used once by migration.py to carry existing sign-ins forward without
+    forcing the user to reconnect every account after an app rename.
+    """
+    try:
+        return keyring.get_password(LEGACY_APP_NAME, _key(kind, email))
+    except keyring.errors.KeyringError as e:
+        log.error("Legacy keyring read failed for %s: %s", email, e)
         return None
 
 

@@ -39,7 +39,7 @@ SCOPES = [
 
 _SUCCESS_PAGE = (
     "<html><body style='font-family:sans-serif'>"
-    "<p>Sign-in complete. You can close this tab and return to Unified Mailbox.</p>"
+    "<p>Sign-in complete. You can close this tab and return to Unified.</p>"
     "</body></html>"
 )
 

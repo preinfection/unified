@@ -1,7 +1,7 @@
 """Application configuration and user settings.
 
 All mutable data (database, logs, settings, OAuth client file) lives in
-%APPDATA%/UnifiedMailbox so the installed .exe never writes next to itself.
+%APPDATA%/Unified so the installed .exe never writes next to itself.
 No secrets are stored here: passwords and OAuth tokens go to the OS keyring
 (see app.auth.secrets_store).
 """
@@ -13,7 +13,12 @@ import logging
 import os
 from pathlib import Path
 
-APP_NAME = "UnifiedMailbox"
+APP_NAME = "Unified"
+
+# Pre-rename name (the app used to be called "UnifiedMailbox"). Kept only so
+# migration.py can find and copy over an existing install's data/secrets the
+# first time this build runs - never used for new data.
+LEGACY_APP_NAME = "UnifiedMailbox"
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +29,12 @@ def app_data_dir() -> Path:
     d = Path(base) / APP_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def legacy_app_data_dir() -> Path:
+    """Where data lived under the app's old name, if this machine has one."""
+    base = os.environ.get("APPDATA") or str(Path.home())
+    return Path(base) / LEGACY_APP_NAME
 
 
 def db_path() -> Path:

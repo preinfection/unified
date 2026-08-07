@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from app import APP_NAME, config, logging_setup
 from app.database import Database
+from app.migration import migrate_legacy_install
 from app.ui.main_window import MainWindow
 from app.ui.style import STYLESHEET
 
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 def main() -> int:
     logging_setup.setup_logging()
     log.info("Starting %s", APP_NAME)
+    migrate_legacy_install()
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
