@@ -132,6 +132,17 @@ QProgressBar {
 }
 QProgressBar::chunk { background: #111111; border-radius: 3px; }
 
+/* ---- Console ---- */
+QPlainTextEdit#console {
+    border: 1px solid #c8c8c8;
+    border-radius: 0;
+    background: #ffffff;
+    color: #222222;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    padding: 2px;
+}
+
 /* ---- Misc ---- */
 QStatusBar {
     background: #ffffff;

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS emails (
     is_read         INTEGER NOT NULL DEFAULT 0,
     is_starred      INTEGER NOT NULL DEFAULT 0,
     has_attachments INTEGER NOT NULL DEFAULT 0,
+    body_fetched    INTEGER NOT NULL DEFAULT 0,
     UNIQUE (account_id, folder, uid)
 );
 
@@ -81,6 +82,17 @@ class Database:
                     f"ALTER TABLE accounts ADD COLUMN {name}"
                     " INTEGER NOT NULL DEFAULT 0"
                 )
+        email_cols = {row[1] for row in conn.execute("PRAGMA table_info(emails)")}
+        if "body_fetched" not in email_cols:
+            conn.execute(
+                "ALTER TABLE emails ADD COLUMN body_fetched"
+                " INTEGER NOT NULL DEFAULT 0"
+            )
+            # Rows cached by earlier versions already carry their bodies.
+            conn.execute(
+                "UPDATE emails SET body_fetched = 1"
+                " WHERE body_text != '' OR body_html != ''"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn: Optional[sqlite3.Connection] = getattr(self._local, "conn", None)
@@ -170,6 +182,43 @@ class Database:
 
     # -------------------------------------------------------------------- emails
 
+    # A metadata-only update (body_fetched=0) must never erase a body that a
+    # previous full fetch already stored - hence the CASE guards.
+    _UPSERT_SQL = """
+        INSERT INTO emails (account_id, uid, folder, sender_name, sender_email,
+            recipients, subject, snippet, body_text, body_html, date_ts,
+            is_read, is_starred, has_attachments, body_fetched)
+        VALUES (:account_id, :uid, :folder, :sender_name, :sender_email,
+            :recipients, :subject, :snippet, :body_text, :body_html, :date_ts,
+            :is_read, :is_starred, :has_attachments, :body_fetched)
+        ON CONFLICT (account_id, folder, uid) DO UPDATE SET
+            is_read = excluded.is_read,
+            is_starred = excluded.is_starred,
+            snippet = excluded.snippet,
+            has_attachments = CASE WHEN excluded.body_fetched = 1
+                THEN excluded.has_attachments ELSE has_attachments END,
+            body_text = CASE WHEN excluded.body_fetched = 1
+                THEN excluded.body_text ELSE body_text END,
+            body_html = CASE WHEN excluded.body_fetched = 1
+                THEN excluded.body_html ELSE body_html END,
+            body_fetched = MAX(body_fetched, excluded.body_fetched)
+    """
+
+    _MSG_DEFAULTS = {
+        "sender_name": "",
+        "sender_email": "",
+        "recipients": "",
+        "subject": "",
+        "snippet": "",
+        "body_text": "",
+        "body_html": "",
+        "date_ts": 0,
+        "is_read": 0,
+        "is_starred": 0,
+        "has_attachments": 0,
+        "body_fetched": 0,
+    }
+
     def upsert_email(self, msg: dict) -> bool:
         """Insert or update a cached message.
 
@@ -180,38 +229,70 @@ class Database:
         conn = self._connect()
         is_new = not self.email_exists(msg["account_id"], msg["folder"], msg["uid"])
         with conn:
-            conn.execute(
-                """
-                INSERT INTO emails (account_id, uid, folder, sender_name, sender_email,
-                    recipients, subject, snippet, body_text, body_html, date_ts,
-                    is_read, is_starred, has_attachments)
-                VALUES (:account_id, :uid, :folder, :sender_name, :sender_email,
-                    :recipients, :subject, :snippet, :body_text, :body_html, :date_ts,
-                    :is_read, :is_starred, :has_attachments)
-                ON CONFLICT (account_id, folder, uid) DO UPDATE SET
-                    is_read = excluded.is_read,
-                    is_starred = excluded.is_starred,
-                    has_attachments = excluded.has_attachments,
-                    snippet = excluded.snippet,
-                    body_text = excluded.body_text,
-                    body_html = excluded.body_html
-                """,
-                {
-                    "sender_name": "",
-                    "sender_email": "",
-                    "recipients": "",
-                    "subject": "",
-                    "snippet": "",
-                    "body_text": "",
-                    "body_html": "",
-                    "date_ts": 0,
-                    "is_read": 0,
-                    "is_starred": 0,
-                    "has_attachments": 0,
-                    **msg,
-                },
-            )
+            conn.execute(self._UPSERT_SQL, {**self._MSG_DEFAULTS, **msg})
         return is_new
+
+    def upsert_emails(self, msgs: list[dict]) -> None:
+        """Batch upsert in a single transaction - one commit per hundreds of
+        messages instead of one per message, which is what makes large
+        initial imports fast."""
+        if not msgs:
+            return
+        conn = self._connect()
+        with conn:
+            conn.executemany(
+                self._UPSERT_SQL, [{**self._MSG_DEFAULTS, **m} for m in msgs]
+            )
+
+    def update_body(
+        self, email_id: int, body_text: str, body_html: str, has_attachments: bool
+    ) -> None:
+        """Store a lazily fetched body and mark it available."""
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                "UPDATE emails SET body_text = ?, body_html = ?,"
+                " has_attachments = ?, body_fetched = 1 WHERE id = ?",
+                (body_text, body_html, 1 if has_attachments else 0, email_id),
+            )
+
+    def get_folder_uids(self, account_id: int, folder: str) -> list[str]:
+        rows = self._connect().execute(
+            "SELECT uid FROM emails WHERE account_id = ? AND folder = ?",
+            (account_id, folder),
+        ).fetchall()
+        return [r["uid"] for r in rows]
+
+    def count_emails(
+        self,
+        folder: str = "inbox",
+        account_id: Optional[int] = None,
+        starred_only: bool = False,
+        search: str = "",
+    ) -> int:
+        """Count with the same filters as list_emails (for 'showing X of Y')."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if starred_only:
+            clauses.append("is_starred = 1 AND folder != 'trash'")
+        else:
+            clauses.append("folder = ?")
+            params.append(folder)
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(account_id)
+        if search:
+            like = f"%{search}%"
+            clauses.append(
+                "(subject LIKE ? OR sender_name LIKE ? OR sender_email LIKE ?"
+                " OR snippet LIKE ? OR body_text LIKE ?)"
+            )
+            params += [like, like, like, like, like]
+        row = self._connect().execute(
+            f"SELECT COUNT(*) AS n FROM emails WHERE {' AND '.join(clauses)}",
+            params,
+        ).fetchone()
+        return int(row["n"])
 
     def email_exists(self, account_id: int, folder: str, uid: str) -> bool:
         row = self._connect().execute(

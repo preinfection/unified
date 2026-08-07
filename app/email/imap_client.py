@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 
 from app.auth import secrets_store
-from app.email.message_parser import parse_rfc822
+from app.email.message_parser import parse_headers, parse_rfc822
 
 log = logging.getLogger(__name__)
 
@@ -76,8 +76,33 @@ class ImapClient:
             raise ImapClientError(f"IMAP search failed in {folder}")
         return [u.decode() for u in data[0].split()]
 
+    def fetch_headers(self, folder: str, uid: str, account_id: int) -> Optional[dict]:
+        """Fetch headers/flags only (fast metadata pass); folder pre-selected."""
+        status, msg_data = self.conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[HEADER])")
+        if status != "OK" or not msg_data or msg_data[0] is None:
+            log.warning("Header fetch failed for uid %s in %s", uid, self.email)
+            return None
+        flags = b" ".join(part for part in msg_data if isinstance(part, bytes))
+        raw = b""
+        for part in msg_data:
+            if isinstance(part, tuple) and len(part) >= 2:
+                if isinstance(part[0], bytes):
+                    flags += part[0]
+                raw = part[1]
+                break
+        if not raw:
+            return None
+        return parse_headers(
+            raw,
+            account_id=account_id,
+            folder=folder,
+            uid=uid,
+            is_read=b"\\Seen" in flags,
+            is_starred=b"\\Flagged" in flags,
+        )
+
     def fetch_message(self, folder: str, uid: str, account_id: int) -> Optional[dict]:
-        """Fetch one message by UID; the folder must already be selected."""
+        """Fetch one full message by UID; the folder must already be selected."""
         status, msg_data = self.conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[])")
         if status != "OK" or not msg_data or msg_data[0] is None:
             log.warning("Fetch failed for uid %s in %s", uid, self.email)

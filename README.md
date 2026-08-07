@@ -12,9 +12,18 @@ accounts into one unified inbox. Built with Python, PySide6 and SQLite.
   an attachment indicator
 - **Multiple accounts** - any number of Gmail accounts (OAuth2 via the Gmail
   API) plus custom IMAP/SMTP accounts
-- **Full mailbox sync** - the initial import paginates through the entire
-  mailbox (batched Gmail API requests), with a progress panel showing fetch
-  progress; later syncs only download new mail
+- **Full mailbox sync, verified** - the initial import paginates through the
+  entire mailbox with batched, rate-limit-aware Gmail API requests. Sync is
+  metadata-first (headers/flags/snippets), so even 15k-message mailboxes
+  import quickly; message bodies download on demand when an email is opened.
+  Completion is verified against the server message count - if anything
+  failed, the app says so honestly and retries on the next Refresh
+- **Parallel per-account sync** - accounts sync on independent background
+  workers with live per-account status in the sidebar (✓ Synced,
+  ↻ Fetching..., Waiting); the app stays fully usable while syncing, and
+  accounts can be added mid-sync
+- **Developer console** - a collapsible monospace log pane (Console button)
+  showing sync activity, page fetches, and errors in real time
 - **Background sync** - periodic synchronization on a configurable interval,
   plus manual refresh; new-mail notifications fire only for mail that arrives
   after the initial import, never for imported existing mail

@@ -62,17 +62,10 @@ def make_snippet(body_text: str, body_html: str, length: int = 160) -> str:
     return _WHITESPACE.sub(" ", text).strip()[:length]
 
 
-def parse_rfc822(raw: bytes, account_id: int, folder: str, uid: str,
-                 is_read: bool = False, is_starred: bool = False) -> dict:
-    """Parse raw message bytes into the dict shape Database.upsert_email expects."""
-    msg = email.message_from_bytes(raw)
-
+def _header_fields(msg: Message) -> dict:
     sender_name, sender_email = email.utils.parseaddr(
         decode_header_value(msg.get("From", ""))
     )
-    recipients = decode_header_value(msg.get("To", ""))
-    subject = decode_header_value(msg.get("Subject", ""))
-
     date_ts = 0
     try:
         dt = email.utils.parsedate_to_datetime(msg.get("Date", ""))
@@ -80,22 +73,50 @@ def parse_rfc822(raw: bytes, account_id: int, folder: str, uid: str,
             date_ts = int(dt.timestamp())
     except (TypeError, ValueError):
         log.debug("Unparseable date header: %r", msg.get("Date"))
+    return {
+        "sender_name": sender_name,
+        "sender_email": sender_email,
+        "recipients": decode_header_value(msg.get("To", "")),
+        "subject": decode_header_value(msg.get("Subject", "")),
+        "date_ts": date_ts,
+    }
 
+
+def parse_rfc822(raw: bytes, account_id: int, folder: str, uid: str,
+                 is_read: bool = False, is_starred: bool = False) -> dict:
+    """Parse full raw message bytes into the Database.upsert_email dict shape."""
+    msg = email.message_from_bytes(raw)
     body_text, body_html, has_attachments = extract_bodies(msg)
 
     return {
         "account_id": account_id,
         "uid": uid,
         "folder": folder,
-        "sender_name": sender_name,
-        "sender_email": sender_email,
-        "recipients": recipients,
-        "subject": subject,
+        **_header_fields(msg),
         "snippet": make_snippet(body_text, body_html),
         "body_text": body_text,
         "body_html": body_html,
-        "date_ts": date_ts,
         "is_read": 1 if is_read else 0,
         "is_starred": 1 if is_starred else 0,
         "has_attachments": 1 if has_attachments else 0,
+        "body_fetched": 1,
+    }
+
+
+def parse_headers(raw_headers: bytes, account_id: int, folder: str, uid: str,
+                  is_read: bool = False, is_starred: bool = False) -> dict:
+    """Parse a headers-only fetch (metadata-first sync; body loads on demand)."""
+    msg = email.message_from_bytes(raw_headers)
+    return {
+        "account_id": account_id,
+        "uid": uid,
+        "folder": folder,
+        **_header_fields(msg),
+        "snippet": "",
+        "body_text": "",
+        "body_html": "",
+        "is_read": 1 if is_read else 0,
+        "is_starred": 1 if is_starred else 0,
+        "has_attachments": 0,
+        "body_fetched": 0,
     }
