@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 SYNC_FOLDERS = ("inbox", "sent", "trash")
 
-# Sidebar / status vocabulary
+# Account status vocabulary
 ST_IDLE = "idle"
 ST_WAITING = "waiting"
 ST_SYNCING = "syncing"
@@ -39,6 +39,32 @@ ST_DONE = "done"          # verified complete
 ST_PARTIAL = "partial"    # finished with failed messages
 ST_ERROR = "error"
 ST_CANCELLED = "cancelled"
+
+# Phases within ST_SYNCING - a strict, visible state machine
+PH_CONNECT = "Connecting"
+PH_LIST = "Downloading message list"
+PH_META = "Syncing metadata"
+PH_BODIES = "Downloading missing bodies"
+PH_INDEX = "Indexing"
+PH_VERIFY = "Verifying"
+
+# How many recent inbox messages get their bodies pre-downloaded per sync,
+# so opening them is instant and works offline.
+BODY_BACKFILL_LIMIT = 200
+
+
+def friendly_error(e: Exception) -> str:
+    """Turn raw client errors into messages a user can act on."""
+    text = str(e)
+    if "Too many concurrent requests" in text or "rateLimitExceeded" in text \
+            or "429" in text:
+        return ("Gmail API rate limit reached - the app backs off and retries "
+                "automatically on the next sync")
+    if "invalid_grant" in text or "credentials" in text.lower():
+        return "Sign-in expired - remove and re-add this account"
+    if "getaddrinfo" in text or "timed out" in text or "Network" in text:
+        return "Network unreachable - check your connection"
+    return text
 
 
 def should_notify(account: dict, msg: dict, is_new: bool) -> bool:
@@ -58,9 +84,13 @@ def should_notify(account: dict, msg: dict, is_new: bool) -> bool:
 
 
 class AccountSyncWorker(QThread):
-    """Synchronizes one account (metadata-first, all folders, verified)."""
+    """Synchronizes one account through an explicit phase state machine:
 
-    progress = Signal(int, str, int, int)   # account_id, detail, done, total
+    Connecting -> per folder (Downloading message list -> Syncing metadata ->
+    Indexing) -> Downloading missing bodies -> Verifying -> done.
+    """
+
+    progress = Signal(int, str, int, int)   # account_id, phase, done, total
     result_ready = Signal(int, dict)        # account_id, result dict
 
     FLUSH_SIZE = 200  # messages per database transaction
@@ -91,17 +121,24 @@ class AccountSyncWorker(QThread):
                 return
             result["was_initial"] = not account["initial_sync_completed"]
             log.info("%s: sync started", account["email"])
+            self.progress.emit(account["id"], PH_CONNECT, 0, 0)
             if account["provider"] == "gmail":
-                self._sync_gmail(db, account, result)
+                folder_counts = self._sync_gmail(db, account, result)
             else:
-                self._sync_imap(db, account, result)
+                folder_counts = self._sync_imap(db, account, result)
             if self._stopped():
                 result["cancelled"] = True
                 log.info("%s: sync cancelled", account["email"])
                 return
+
+            # ---- Verifying: never claim complete without matching counts.
+            self.progress.emit(account["id"], PH_VERIFY, 0, 0)
+            for folder, server_count in folder_counts.items():
+                local = db.count_emails(folder=folder, account_id=account["id"])
+                result["server_total"] += server_count
+                result["local_total"] += local
+                result["failed"] += max(0, server_count - local)
             now = int(time.time())
-            # Verified completion only: an initial sync counts as done when
-            # every server message is actually present locally.
             log.info(
                 "%s: verify - server %d, local %d, failed %d",
                 account["email"], result["server_total"],
@@ -113,8 +150,9 @@ class AccountSyncWorker(QThread):
             log.info("%s: sync finished (%d imported, %d failed)",
                      account["email"], result["imported"], result["failed"])
         except Exception as e:
-            log.error("Sync failed for account %s: %s", self.account_id, e)
-            result["error"] = str(e)
+            reason = friendly_error(e)
+            log.error("Sync failed for account %s: %s", self.account_id, reason)
+            result["error"] = reason
         finally:
             db.close()
             self.result_ready.emit(self.account_id, result)
@@ -122,35 +160,36 @@ class AccountSyncWorker(QThread):
     # ---------------------------------------------------------------- helpers
 
     def _flush(self, db: Database, account: dict, batch: list[dict],
-               result: dict) -> None:
+               result: dict, count_import: bool = True) -> None:
         if not batch:
             return
         db.upsert_emails(batch)
-        result["imported"] += len(batch)
-        for msg in batch:
-            if should_notify(account, msg, True):
-                result["notify"] += 1
+        if count_import:
+            result["imported"] += len(batch)
+            for msg in batch:
+                if should_notify(account, msg, True):
+                    result["notify"] += 1
         batch.clear()
 
     # ------------------------------------------------------------------ gmail
 
-    def _sync_gmail(self, db: Database, account: dict, result: dict) -> None:
+    def _sync_gmail(self, db: Database, account: dict, result: dict) -> dict:
         client = GmailClient(account["email"])
         aid = account["id"]
+        folder_counts: dict[str, int] = {}
         for folder in SYNC_FOLDERS:
             if self._stopped():
-                return
-            self.progress.emit(aid, f"Fetching email list ({folder})...", 0, 0)
+                return folder_counts
+            self.progress.emit(aid, PH_LIST, 0, 0)
             ids = client.list_all_message_ids(
                 folder,
                 on_page=lambda n, f=folder: (
                     log.info("%s: %s list - %d ids so far",
                              account["email"], f, n),
-                    self.progress.emit(
-                        aid, f"Fetching email list ({f}): {n} found...", 0, 0
-                    ),
+                    self.progress.emit(aid, PH_LIST, n, 0),
                 ),
             )
+            folder_counts[folder] = len(ids)
             existing = set(db.get_folder_uids(aid, folder))
             new_ids = [i for i in ids if i not in existing]
             total = len(new_ids)
@@ -167,40 +206,65 @@ class AccountSyncWorker(QThread):
                 if len(pending) >= self.FLUSH_SIZE:
                     self._flush(db, account, pending, result)
                 if done % 50 == 0 or done == total:
-                    self.progress.emit(
-                        aid, f"Downloading metadata ({folder})...", done, total
-                    )
+                    self.progress.emit(aid, PH_META, done, total)
 
             failed_ids = client.fetch_metadata(
                 new_ids, aid, folder, on_message, should_stop=self._stopped
             ) if new_ids else []
             self._flush(db, account, pending, result)
             if self._stopped():
-                return
+                return folder_counts
 
-            self.progress.emit(aid, f"Building local cache ({folder})...", 1, 1)
+            self.progress.emit(aid, PH_INDEX, 0, 0)
             db.replace_folder_uids(aid, folder, ids)
-
-            local = db.count_emails(folder=folder, account_id=aid)
-            result["server_total"] += len(ids)
-            result["local_total"] += local
-            result["failed"] += max(0, len(ids) - local)
             if failed_ids:
                 log.warning("%s: %s - %d messages failed to download",
                             account["email"], folder, len(failed_ids))
-        self.progress.emit(aid, "Updating unread counters...", 1, 1)
+
+        self._backfill_gmail_bodies(db, client, account)
+        return folder_counts
+
+    def _backfill_gmail_bodies(self, db: Database, client: GmailClient,
+                               account: dict) -> None:
+        """Pre-download bodies for the newest inbox messages still missing one."""
+        aid = account["id"]
+        uids = db.get_missing_body_uids(aid, "inbox", BODY_BACKFILL_LIMIT)
+        if not uids or self._stopped():
+            return
+        log.info("%s: downloading %d missing bodies", account["email"], len(uids))
+        total = len(uids)
+        done = 0
+        pending: list[dict] = []
+
+        def on_message(msg: dict) -> None:
+            nonlocal done
+            pending.append(msg)
+            done += 1
+            if len(pending) >= 50:
+                db.upsert_emails(pending)
+                pending.clear()
+            if done % 20 == 0 or done == total:
+                self.progress.emit(aid, PH_BODIES, done, total)
+
+        self.progress.emit(aid, PH_BODIES, 0, total)
+        # Failures are fine here: bodies still load on demand when opened.
+        client.fetch_bodies(uids, aid, "inbox", on_message,
+                            should_stop=self._stopped)
+        db.upsert_emails(pending)
 
     # ------------------------------------------------------------------- imap
 
-    def _sync_imap(self, db: Database, account: dict, result: dict) -> None:
+    def _sync_imap(self, db: Database, account: dict, result: dict) -> dict:
         client = ImapClient(account)
         aid = account["id"]
+        folder_counts: dict[str, int] = {}
         try:
             for folder in SYNC_FOLDERS:
                 if self._stopped():
-                    return
-                self.progress.emit(aid, f"Fetching email list ({folder})...", 0, 0)
+                    return folder_counts
+                self.progress.emit(aid, PH_LIST, 0, 0)
                 uids = client.list_uids(folder)
+                folder_counts[folder] = len(uids)
                 existing = set(db.get_folder_uids(aid, folder))
                 new_uids = [u for u in uids if u not in existing]
                 total = len(new_uids)
@@ -213,28 +277,37 @@ class AccountSyncWorker(QThread):
                     for done, uid in enumerate(reversed(new_uids), start=1):
                         if self._stopped():
                             self._flush(db, account, pending, result)
-                            return
+                            return folder_counts
                         msg = client.fetch_headers(folder, uid, aid)
                         if msg is not None:
                             pending.append(msg)
                         if len(pending) >= self.FLUSH_SIZE:
                             self._flush(db, account, pending, result)
                         if done % 20 == 0 or done == total:
-                            self.progress.emit(
-                                aid, f"Downloading metadata ({folder})...",
-                                done, total,
-                            )
+                            self.progress.emit(aid, PH_META, done, total)
                 self._flush(db, account, pending, result)
-                self.progress.emit(aid, f"Building local cache ({folder})...", 1, 1)
+                self.progress.emit(aid, PH_INDEX, 0, 0)
                 db.replace_folder_uids(aid, folder, uids)
 
-                local = db.count_emails(folder=folder, account_id=aid)
-                result["server_total"] += len(uids)
-                result["local_total"] += local
-                result["failed"] += max(0, len(uids) - local)
+            # Body backfill for the newest inbox messages (smaller cap: IMAP
+            # fetches are sequential).
+            uids = db.get_missing_body_uids(aid, "inbox", 50)
+            if uids and client.select_for_reading("inbox"):
+                total = len(uids)
+                self.progress.emit(aid, PH_BODIES, 0, total)
+                pending = []
+                for done, uid in enumerate(uids, start=1):
+                    if self._stopped():
+                        break
+                    msg = client.fetch_message("inbox", uid, aid)
+                    if msg is not None:
+                        pending.append(msg)
+                    if done % 10 == 0 or done == total:
+                        self.progress.emit(aid, PH_BODIES, done, total)
+                db.upsert_emails(pending)
         finally:
             client.close()
-        self.progress.emit(aid, "Updating unread counters...", 1, 1)
+        return folder_counts
 
 
 class SyncManager(QObject):
@@ -248,7 +321,7 @@ class SyncManager(QObject):
     MAX_PARALLEL = 2
 
     state_changed = Signal(int)             # account_id
-    progress = Signal(int, str, int, int)   # account_id, detail, done, total
+    progress = Signal(int, str, int, int)   # account_id, phase, done, total
     account_done = Signal(int, dict)        # account_id, result
     all_finished = Signal(int)              # total notify count for this round
 
@@ -309,16 +382,16 @@ class SyncManager(QObject):
             worker.progress.connect(self._on_progress)
             worker.result_ready.connect(self._on_result)
             self._workers[aid] = worker
-            self._set_state(aid, ST_SYNCING, detail="Starting...")
+            self._set_state(aid, ST_SYNCING, phase=PH_CONNECT, done=0, total=0)
             worker.start()
 
     # ---------------------------------------------------------------- signals
 
-    def _on_progress(self, account_id: int, detail: str, done: int, total: int) -> None:
+    def _on_progress(self, account_id: int, phase: str, done: int, total: int) -> None:
         state = self._states.get(account_id)
         if state is not None:
-            state.update(detail=detail, done=done, total=total)
-        self.progress.emit(account_id, detail, done, total)
+            state.update(phase=phase, done=done, total=total)
+        self.progress.emit(account_id, phase, done, total)
 
     def _on_result(self, account_id: int, result: dict) -> None:
         worker = self._workers.pop(account_id, None)

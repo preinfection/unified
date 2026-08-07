@@ -15,15 +15,35 @@ accounts into one unified inbox. Built with Python, PySide6 and SQLite.
 - **Full mailbox sync, verified** - the initial import paginates through the
   entire mailbox with batched, rate-limit-aware Gmail API requests. Sync is
   metadata-first (headers/flags/snippets), so even 15k-message mailboxes
-  import quickly; message bodies download on demand when an email is opened.
-  Completion is verified against the server message count - if anything
-  failed, the app says so honestly and retries on the next Refresh
+  import quickly; the newest messages get bodies pre-downloaded, and the
+  rest download on demand when opened. Completion is verified against the
+  server message count - if anything failed, the app says so honestly
+  ("15,580 / 15,644 downloaded, 64 failed, retry available") and retries on
+  the next Refresh; it never reports "ready" without checking
+- **Every message reachable, obviously** - the message list has a display
+  limit for performance, but never hides mail silently: the status bar and
+  a "Load more" button always show the true count ("Showing newest 1,000 of
+  20,100 emails"), and search reaches the entire local cache regardless of
+  the display limit
+- **Explicit sync state machine** - each account is in exactly one state at
+  a time (Connecting, Downloading message list, Syncing metadata,
+  Downloading missing bodies, Verifying, Complete, Failed), shown live in
+  the sidebar with real numbers, e.g. "↻ Syncing metadata 8,420/15,754" or
+  "✓ Complete - 15,754/15,754 verified"
 - **Parallel per-account sync** - accounts sync on independent background
-  workers with live per-account status in the sidebar (✓ Synced,
-  ↻ Fetching..., Waiting); the app stays fully usable while syncing, and
-  accounts can be added mid-sync
+  workers (2 at a time, rest queued and visibly "Waiting"); the app stays
+  fully usable while syncing, and accounts can be added mid-sync
+- **Race-safe email viewer** - clicking rapidly between emails never shows
+  the wrong content: a stale body arriving late for a previously-selected
+  email is discarded, and duplicate fetches for the same email are
+  suppressed
+- **Startup integrity check** - on launch, the local database is checked
+  (structural integrity, duplicate message ids, orphaned rows, invalid
+  folders) and auto-repaired; problems are reported, never silently ignored
+  and never crash the app
 - **Developer console** - a collapsible monospace log pane (Console button)
-  showing sync activity, page fetches, and errors in real time
+  with category filters (All / Sync / Errors / Database / API), clear,
+  copy-to-clipboard, and an auto-scroll toggle
 - **Background sync** - periodic synchronization on a configurable interval,
   plus manual refresh; new-mail notifications fire only for mail that arrives
   after the initial import, never for imported existing mail

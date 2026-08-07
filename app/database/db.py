@@ -256,6 +256,84 @@ class Database:
                 (body_text, body_html, 1 if has_attachments else 0, email_id),
             )
 
+    def get_missing_body_uids(
+        self, account_id: int, folder: str, limit: int = 200
+    ) -> list[str]:
+        """Newest messages whose bodies have not been downloaded yet."""
+        rows = self._connect().execute(
+            "SELECT uid FROM emails WHERE account_id = ? AND folder = ?"
+            " AND body_fetched = 0 ORDER BY date_ts DESC LIMIT ?",
+            (account_id, folder, limit),
+        ).fetchall()
+        return [r["uid"] for r in rows]
+
+    def check_and_repair(self) -> dict:
+        """Startup integrity check. Returns {'ok', 'problems', 'repaired'}.
+
+        Never raises for data problems - it repairs what it can and reports
+        the rest so the UI can tell the user instead of crashing.
+        """
+        report = {"ok": True, "problems": [], "repaired": []}
+        conn = self._connect()
+        try:
+            row = conn.execute("PRAGMA quick_check").fetchone()
+            if row is None or row[0] != "ok":
+                report["ok"] = False
+                report["problems"].append(
+                    f"database integrity: {row[0] if row else 'unknown'}"
+                )
+                return report  # structural damage; do not attempt row surgery
+        except sqlite3.DatabaseError as e:
+            report["ok"] = False
+            report["problems"].append(f"database unreadable: {e}")
+            return report
+
+        # Duplicate message ids (the unique index should prevent these; a
+        # crash mid-migration could leave them behind).
+        dup = conn.execute(
+            "SELECT COUNT(*) AS n FROM (SELECT 1 FROM emails"
+            " GROUP BY account_id, folder, uid HAVING COUNT(*) > 1)"
+        ).fetchone()["n"]
+        if dup:
+            report["problems"].append(f"{dup} duplicate message ids")
+            with conn:
+                conn.execute(
+                    "DELETE FROM emails WHERE id NOT IN"
+                    " (SELECT MIN(id) FROM emails"
+                    "  GROUP BY account_id, folder, uid)"
+                )
+            report["repaired"].append(f"removed {dup} duplicate message groups")
+
+        # Orphaned messages whose account no longer exists.
+        orphans = conn.execute(
+            "SELECT COUNT(*) AS n FROM emails WHERE account_id NOT IN"
+            " (SELECT id FROM accounts)"
+        ).fetchone()["n"]
+        if orphans:
+            report["problems"].append(f"{orphans} messages from removed accounts")
+            with conn:
+                conn.execute(
+                    "DELETE FROM emails WHERE account_id NOT IN"
+                    " (SELECT id FROM accounts)"
+                )
+            report["repaired"].append(f"removed {orphans} orphaned messages")
+
+        # Rows violating folder vocabulary (corrupt writes).
+        bad = conn.execute(
+            "SELECT COUNT(*) AS n FROM emails WHERE folder NOT IN"
+            " ('inbox', 'sent', 'trash')"
+        ).fetchone()["n"]
+        if bad:
+            report["problems"].append(f"{bad} rows with invalid folder")
+            with conn:
+                conn.execute(
+                    "DELETE FROM emails WHERE folder NOT IN"
+                    " ('inbox', 'sent', 'trash')"
+                )
+            report["repaired"].append(f"removed {bad} invalid rows")
+
+        return report
+
     def get_folder_uids(self, account_id: int, folder: str) -> list[str]:
         rows = self._connect().execute(
             "SELECT uid FROM emails WHERE account_id = ? AND folder = ?",

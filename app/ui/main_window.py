@@ -39,6 +39,12 @@ from app.database import Database
 from app.services.account_manager import AccountManager
 from app.services.notifier import Notifier
 from app.services.sync_service import (
+    PH_BODIES,
+    PH_CONNECT,
+    PH_INDEX,
+    PH_LIST,
+    PH_META,
+    PH_VERIFY,
     ST_DONE,
     ST_ERROR,
     ST_PARTIAL,
@@ -48,6 +54,16 @@ from app.services.sync_service import (
     RemoteActionWorker,
     SyncManager,
 )
+
+# Friendly first-launch wording for each sync phase (panel display)
+PHASE_TEXT = {
+    PH_CONNECT: "Connecting account...",
+    PH_LIST: "Downloading message list...",
+    PH_META: "Downloading message list...",
+    PH_BODIES: "Downloading message content...",
+    PH_INDEX: "Preparing mailbox...",
+    PH_VERIFY: "Preparing mailbox...",
+}
 from app.ui.account_dialog import AccountDialog
 from app.ui.compose_dialog import ComposeDialog
 from app.ui.console import ConsoleWidget
@@ -81,8 +97,10 @@ class MainWindow(QMainWindow):
         self._account_dialog: AccountDialog | None = None
         self._action_workers: list[RemoteActionWorker] = []
         self._body_workers: list[BodyFetchWorker] = []
+        self._fetching_body_ids: set[int] = set()
         self._status_items: dict[int, QTreeWidgetItem] = {}
         self._panel_account_id: int | None = None
+        self._extra_limit = 0  # raised by the Load More button
 
         self.setWindowTitle("Unified Mailbox")
         self.setWindowIcon(make_app_icon())
@@ -115,8 +133,47 @@ class MainWindow(QMainWindow):
 
         self.reload_sidebar()
         self.reload_email_list()
+        QTimer.singleShot(50, self._startup_integrity_check)
         if self.db.get_accounts():
             QTimer.singleShot(400, self.start_sync)
+
+    def _startup_integrity_check(self) -> None:
+        """Verify the local database and stored sign-ins; repair, never crash."""
+        report = self.db.check_and_repair()
+        if not report["ok"]:
+            log.error("Database check found issues: %s",
+                      "; ".join(report["problems"]))
+            self.statusBar().showMessage(
+                "Database check found issues - "
+                + "; ".join(report["problems"])
+            )
+            return
+        if report["problems"]:
+            log.warning("Database check found issues: %s - repairing...",
+                        "; ".join(report["problems"]))
+            log.info("Database repaired: %s", "; ".join(report["repaired"]))
+            self.statusBar().showMessage(
+                "Database check found issues - repaired: "
+                + "; ".join(report["repaired"])
+            )
+            self.reload_sidebar()
+            self.reload_email_list()
+        else:
+            log.info("Database check passed (%s accounts, %s cached emails)",
+                     len(self.db.get_accounts()),
+                     f"{self.db.count_emails('inbox') + self.db.count_emails('sent') + self.db.count_emails('trash'):,}")
+
+        # Stored sign-ins present? (No network call - just keyring presence.)
+        from app.auth import secrets_store
+        for account in self.db.get_accounts():
+            kind = (secrets_store.KIND_GMAIL_TOKEN
+                    if account["provider"] == "gmail"
+                    else secrets_store.KIND_IMAP_PASSWORD)
+            if not secrets_store.get_secret(kind, account["email"]):
+                log.warning(
+                    "%s: no stored sign-in found - remove and re-add this "
+                    "account", account["email"],
+                )
 
     # ------------------------------------------------------------------ toolbar
 
@@ -147,7 +204,7 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText("Search all accounts...")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setFixedWidth(320)
-        self.search_edit.textChanged.connect(lambda: self._search_timer.start())
+        self.search_edit.textChanged.connect(self._on_search_changed)
         toolbar.addWidget(self.search_edit)
 
     # --------------------------------------------------------------------- body
@@ -177,8 +234,20 @@ class MainWindow(QMainWindow):
         self.email_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.email_list.customContextMenuRequested.connect(self._email_context_menu)
 
+        # List page: the list plus a Load More button that appears whenever
+        # the display limit hides messages (so nothing ever looks missing).
+        list_page = QWidget()
+        lp = QVBoxLayout(list_page)
+        lp.setContentsMargins(0, 0, 0, 0)
+        lp.setSpacing(4)
+        self.load_more_btn = QPushButton("Load more")
+        self.load_more_btn.setVisible(False)
+        self.load_more_btn.clicked.connect(self._load_more)
+        lp.addWidget(self.email_list, stretch=1)
+        lp.addWidget(self.load_more_btn)
+
         self.center_stack = QStackedWidget()
-        self.center_stack.addWidget(self.email_list)
+        self.center_stack.addWidget(list_page)
         self.center_stack.addWidget(self._build_sync_panel())
         splitter.addWidget(self.center_stack)
 
@@ -340,19 +409,29 @@ class MainWindow(QMainWindow):
         state = self.sync.status(account["id"])
         status = state["status"]
         if status == ST_SYNCING:
-            detail = state.get("detail", "Syncing...")
+            phase = state.get("phase", PH_CONNECT)
             done, total = state.get("done", 0), state.get("total", 0)
-            suffix = f" {done}/{total}" if total else ""
-            return f"↻ {detail}{suffix}"
+            if total:
+                return f"↻ {phase} {done:,}/{total:,}"
+            if done:  # listing phase reports a running count
+                return f"↻ {phase} ({done:,} found)"
+            return f"↻ {phase}"
         if status == ST_WAITING:
             return "· Waiting"
         if status == ST_ERROR:
-            return "✗ Sync failed"
+            result = state.get("result", {})
+            reason = result.get("error", "unknown error")
+            return f"✗ Failed: {reason[:60]}"
         if status == ST_PARTIAL:
             result = state.get("result", {})
-            return (f"⚠ {result.get('local_total', 0)}/"
-                    f"{result.get('server_total', 0)} - Refresh to retry")
-        if status == ST_DONE or account["initial_sync_completed"]:
+            return (f"⚠ {result.get('local_total', 0):,}/"
+                    f"{result.get('server_total', 0):,}"
+                    f" - {result.get('failed', 0)} failed, Refresh to retry")
+        if status == ST_DONE:
+            result = state.get("result", {})
+            return (f"✓ Complete - {result.get('local_total', 0):,}/"
+                    f"{result.get('server_total', 0):,} verified")
+        if account["initial_sync_completed"]:
             return "✓ Synced"
         return ""
 
@@ -372,6 +451,8 @@ class MainWindow(QMainWindow):
         if not data:
             return
         kind, value = data
+        if kind in ("view", "account"):
+            self._extra_limit = 0  # each view starts at the base display limit
         if kind == "view":
             self.current_view = value
             self.current_account_id = None
@@ -396,11 +477,19 @@ class MainWindow(QMainWindow):
         self.reload_sidebar()
         self.reload_email_list()
 
+    def _on_search_changed(self) -> None:
+        self._extra_limit = 0
+        self._search_timer.start()
+
+    def _load_more(self) -> None:
+        self._extra_limit += int(self.settings.get("messages_shown"))
+        self.reload_email_list()
+
     def reload_email_list(self) -> None:
         search = self.search_edit.text().strip()
         starred = self.current_view == "starred"
         folder = self.current_view if not starred else "inbox"
-        limit = int(self.settings.get("messages_shown"))
+        limit = int(self.settings.get("messages_shown")) + self._extra_limit
         emails = self.db.list_emails(
             folder=folder,
             account_id=self.current_account_id,
@@ -453,13 +542,18 @@ class MainWindow(QMainWindow):
         shown = len(emails)
         if total > shown:
             self.statusBar().showMessage(
-                f"Showing newest {shown} of {total} messages"
-                " (limit adjustable in Settings)"
+                f"Showing newest {shown:,} of {total:,} emails"
+                " - use Load more or search to reach older mail"
             )
+            self.load_more_btn.setText(
+                f"Load more  (showing {shown:,} of {total:,} emails)"
+            )
+            self.load_more_btn.setVisible(True)
         else:
             self.statusBar().showMessage(
-                f"{total} message{'s' if total != 1 else ''}"
+                f"{total:,} message{'s' if total != 1 else ''}"
             )
+            self.load_more_btn.setVisible(False)
         self._refresh_center_page(shown)
 
     def _refresh_center_page(self, email_count: int) -> None:
@@ -498,16 +592,21 @@ class MainWindow(QMainWindow):
         self.sync_account_label.setText(account["email"])
         state = self.sync.status(account["id"])
         if state["status"] == ST_SYNCING:
-            detail = state.get("detail", "Fetching emails...")
+            phase = state.get("phase", PH_CONNECT)
             done, total = state.get("done", 0), state.get("total", 0)
-            self.sync_status_label.setText("Syncing mailbox...")
-            self.sync_detail_label.setText(
-                f"{detail}  ({done}/{total})" if total else detail
-            )
+            friendly = PHASE_TEXT.get(phase, phase + "...")
+            if account["provider"] == "gmail" and phase == PH_CONNECT:
+                friendly = "Connecting Gmail..."
+            self.sync_status_label.setText(friendly)
             if total:
+                self.sync_detail_label.setText(f"{phase}  {done:,} / {total:,}")
                 self.sync_bar.setRange(0, total)
                 self.sync_bar.setValue(done)
+            elif done:
+                self.sync_detail_label.setText(f"{phase}: {done:,} found")
+                self.sync_bar.setRange(0, 0)
             else:
+                self.sync_detail_label.setText(phase)
                 self.sync_bar.setRange(0, 0)
         elif state["status"] == ST_WAITING:
             self.sync_status_label.setText("Waiting to sync...")
@@ -517,7 +616,7 @@ class MainWindow(QMainWindow):
             self.sync_bar.setRange(0, 0)
         else:
             self.sync_status_label.setText("Loading mailbox...")
-            self.sync_detail_label.setText("Fetching emails...")
+            self.sync_detail_label.setText("Preparing mailbox...")
             self.sync_bar.setRange(0, 0)
 
     @staticmethod
@@ -596,17 +695,23 @@ class MainWindow(QMainWindow):
             self.preview_body.set_email_text("(This message has no content.)")
 
     def _start_body_fetch(self, msg: dict) -> None:
+        if msg["id"] in self._fetching_body_ids:
+            return  # rapid re-click on the same email: one fetch is enough
         account = self.db.get_account(msg["account_id"])
         if account is None:
             self._show_preview_placeholder(
                 "Message unavailable", "The account for this message was removed."
             )
             return
+        self._fetching_body_ids.add(msg["id"])
         worker = BodyFetchWorker(self.db.path, msg, account, self)
         worker.loaded.connect(self._on_body_loaded)
         worker.failed.connect(self._on_body_failed)
         worker.finished.connect(
-            lambda w=worker: w in self._body_workers and self._body_workers.remove(w)
+            lambda w=worker, mid=msg["id"]: (
+                self._fetching_body_ids.discard(mid),
+                w in self._body_workers and self._body_workers.remove(w),
+            )
         )
         self._body_workers.append(worker)
         worker.start()
@@ -724,7 +829,7 @@ class MainWindow(QMainWindow):
         self.sync.request_sync([a["id"] for a in accounts])
 
     def _on_account_progress(
-        self, account_id: int, detail: str, done: int, total: int
+        self, account_id: int, phase: str, done: int, total: int
     ) -> None:
         self._update_status_item(account_id)
         if self._panel_account_id == account_id:
@@ -750,13 +855,13 @@ class MainWindow(QMainWindow):
         elif result.get("failed"):
             self.statusBar().showMessage(
                 f"Sync completed with issues - {email}: "
-                f"{result['local_total']}/{result['server_total']} downloaded, "
-                f"{result['failed']} failed. Press Refresh to retry."
+                f"{result['local_total']:,}/{result['server_total']:,} downloaded, "
+                f"{result['failed']:,} failed. Press Refresh to retry."
             )
         elif result.get("was_initial"):
             self.statusBar().showMessage(
                 f"Mailbox ready - {email}: "
-                f"{result['local_total']} messages verified in local cache"
+                f"{result['local_total']:,} messages verified in local cache"
             )
         self._schedule_reload()
 

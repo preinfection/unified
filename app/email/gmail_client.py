@@ -141,6 +141,51 @@ class GmailClient:
             time.sleep(0.1)
         return failed
 
+    def fetch_bodies(
+        self,
+        msg_ids: list[str],
+        account_id: int,
+        folder: str,
+        on_message,
+        should_stop=None,
+    ) -> list[str]:
+        """Fetch full messages (bodies) in small paced batches; returns failed ids.
+
+        Used to backfill bodies for recent messages after the metadata sync,
+        so opening them is instant and works offline.
+        """
+        failed: list[str] = []
+
+        def _callback(request_id, response, exception) -> None:
+            if exception is not None:
+                log.warning("Gmail body fetch failed for %s: %s",
+                            request_id, exception)
+                failed.append(request_id)
+                return
+            on_message(self._to_message_dict(response, account_id, folder))
+
+        batch_size = 10  # full bodies are heavy; keep concurrency low
+        for start in range(0, len(msg_ids), batch_size):
+            if should_stop is not None and should_stop():
+                failed.extend(msg_ids[start:])
+                return failed
+            chunk = msg_ids[start:start + batch_size]
+            batch = self.service.new_batch_http_request(callback=_callback)
+            for msg_id in chunk:
+                batch.add(
+                    self.service.users().messages().get(
+                        userId="me", id=msg_id, format="full"
+                    ),
+                    request_id=msg_id,
+                )
+            try:
+                self._execute_with_retry(batch)
+            except HttpError as e:
+                log.error("Gmail body batch failed after retries: %s", e)
+                failed.extend(chunk)
+            time.sleep(0.1)
+        return failed
+
     @staticmethod
     def _execute_with_retry(batch, attempts: int = 3) -> None:
         for attempt in range(attempts):
