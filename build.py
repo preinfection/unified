@@ -63,7 +63,7 @@ def build() -> int:
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--windowed",                       # no console window
+        "--windowed",
         "--name", "Unified",
         "--icon", str(ICON),
         # Real SVG icon assets (app/ui/svg_icon.py resolves these relative
