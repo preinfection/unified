@@ -6,6 +6,25 @@ black-and-white, and fast even at 20,000+ cached messages.
 
 ![Unified main window](assets/screenshot.png)
 
+## Installation
+
+**For most users:** download `Unified-Setup-v1.0.0.exe` from the
+[Releases](../../releases) page and run it. No Python, no terminal, no
+manual copying required.
+
+- You choose the install location on the wizard's Browse... screen
+  (defaults to Program Files, or a per-user folder if you don't run the
+  installer as administrator).
+- Desktop and Start Menu shortcuts are both optional - create either,
+  both, or neither, exactly as you leave the checkboxes.
+- A normal Windows uninstall entry is created (Settings → Apps, or
+  Control Panel → Programs and Features).
+- Installing, upgrading, or uninstalling never touches
+  `%APPDATA%\Unified` - your accounts, settings, and encrypted mailbox
+  cache are only ever added or removed by the app itself.
+
+The sections below are for running or building Unified from source.
+
 ## Features
 
 - **Unified inbox** - all incoming mail from every connected account in one list,
@@ -118,7 +137,7 @@ The password is verified against the server and then stored only in the
 Windows Credential Manager. For providers with 2FA (including Gmail via IMAP),
 use an app password.
 
-## Building the .exe
+## Building from source
 
 ```powershell
 .venv\Scripts\python build.py
@@ -127,6 +146,21 @@ use an app password.
 The build output is `dist\Unified\Unified.exe`. The whole `dist\Unified`
 folder is the installation - copy it anywhere and run the exe. User data is
 kept in `%APPDATA%\Unified`.
+
+### Building the installer
+
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php). Build
+`dist\Unified\` first (above), then compile `installer\Unified.iss` -
+either open it in the Inno Setup Compiler and press Build, or from the
+command line:
+
+```powershell
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\Unified.iss
+```
+
+Output: `release\Unified-Setup-v1.0.0.exe`. The installer's `AppId` is
+fixed (see the comment at the top of the `.iss` file) so future versions
+upgrade in place instead of installing side by side - do not regenerate it.
 
 ## Running tests
 
@@ -143,12 +177,14 @@ Unified/
 │   ├── database/      # SQLite storage (accounts + cached emails)
 │   ├── email/         # Gmail API, IMAP, SMTP clients and MIME parsing
 │   ├── auth/          # OAuth2 flow and OS-keyring secret storage
+│   ├── security/      # at-rest database encryption (DPAPI + AES-256-GCM)
 │   ├── services/      # account manager, background sync, notifications
 │   ├── config.py      # paths and user settings (%APPDATA%)
 │   ├── migration.py   # one-time carry-over from older installs
 │   ├── logging_setup.py
 │   └── main.py        # application entry point
-├── assets/            # icon + screenshot for the repo/README
+├── assets/            # icon + screenshots for the repo/README
+├── installer/         # Inno Setup script (Unified-Setup-vX.Y.Z.exe)
 ├── tests/             # pytest suite
 ├── build.py           # PyInstaller build script
 ├── run.py             # launcher
