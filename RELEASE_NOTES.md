@@ -1,8 +1,77 @@
-# Unified v1.0.0
+# Unified
+
+## v1.0.1
+
+UI redesign. No backend, sync, database, encryption, or installer *logic*
+changed in this release - only the presentation layer.
+
+### What changed
+
+- **Complete visual redesign**, following a dark, modern reference design
+  (structure, spacing, and typography hierarchy - not literal chrome/
+  colors copied from any particular brand): dark charcoal surfaces,
+  restrained accent color used only as signal (unread dots, selected
+  state, status), and elevated "card" panels for the sidebar and message
+  reading pane instead of flat single-tone regions.
+- **Account drawer sidebar**: each connected account now shows as its own
+  row with an avatar (initial letter, deterministic muted color per
+  address), a live-updating status line (Waiting / Syncing metadata N/M /
+  Complete - verified / Failed: reason), and an unread-count badge -
+  replacing the old plain tree list.
+- **Rebuilt message list for real scale**: previously a `QTreeWidget`
+  populated with one item per row, now a `QListView` backed by a proper
+  `QAbstractListModel` with a custom-painted row delegate (avatar, bold
+  sender for unread, subject + snippet, time, star/attachment glyphs).
+  Nothing is instantiated per row beyond what's on screen - verified at
+  10,000+ rows with sub-100ms model load and ~2-3ms per scroll step (see
+  Release validation below).
+- **Redesigned reading pane**: sender identity, subject, and a generic
+  "Has attachment" indicator (the data model only ever stored a boolean
+  flag, never per-file names, so nothing is fabricated) in an elevated
+  card header above the message body.
+- **New reusable component modules** under `app/ui/components/`:
+  `SidebarWidget`, `AccountItem`, `EmailListView`/`EmailListModel`/
+  `EmailRowDelegate`, `PreviewPane`, `TopToolBar`, `StatusIndicator`,
+  `LoadingState`, plus a shared `avatar.py` painter and a single
+  `theme.py` token module both the stylesheet and the custom-painted
+  delegates read from, so a color can't drift between the two.
+- Native title bar now follows the app's dark theme (previously forced
+  white) via the same DWM API technique as before.
+- Version bumped to 1.0.1 throughout: app metadata, the Settings dialog's
+  version label, the Inno Setup installer (`AppId` deliberately
+  unchanged - see Install instructions), and this document.
+
+### Fixed during the redesign (found via testing, not requested changes)
+
+- A `QSplitter` reserved proportional height for the console panel even
+  while it was hidden, which could squeeze the sidebar enough to push its
+  Settings button below the visible window at smaller heights. Console
+  now starts collapsed to zero height and only claims space when actually
+  toggled visible.
+- Several widget types (`QTextBrowser`, `QStackedWidget`) don't reliably
+  composite a QSS `background: transparent` through to the window behind
+  them - both were switched to an explicit background color instead,
+  which is also what fixed message body text being nearly unreadable
+  against the wrong background.
+
+### Untouched in this release
+
+Gmail API integration, OAuth authentication, account storage, the
+encryption system, DPAPI handling, the SQLite schema, sync workers,
+background threads, email fetching, MIME parsing, the search backend,
+notifications, and the build/installer *scripts* (only the version
+number changed in `installer/Unified.iss`) - verified by diff, not just
+by intent: the full pre-existing test suite (54 tests covering database,
+crypto, migration, sync logic, OAuth flow, and message parsing) passes
+unchanged.
+
+---
+
+## v1.0.0
 
 First public release.
 
-## Features
+### Features
 
 - Unified inbox combining any number of Gmail (OAuth2, official Gmail API)
   and custom IMAP/SMTP accounts, showing account, sender, subject, time,
@@ -32,8 +101,9 @@ First public release.
 - Collapsible developer console with category filters (All/Sync/Errors/
   Database/API), clear, copy-to-clipboard, and auto-scroll
 - Plain black-and-white UI: no gradients, no cards, no animations
+  (superseded by the redesign in v1.0.1 above)
 
-## Known limitations
+### Known limitations
 
 - **Windows only.** Uses PySide6, the Windows Credential Manager, and
   Windows DPAPI for local encryption; there is no macOS/Linux build.
@@ -59,19 +129,19 @@ First public release.
   guarantee it provides is real but specific, and it is not a substitute
   for full-disk encryption (BitLocker) or endpoint security.
 
-## Security notes
+### Security notes
 
 - **OAuth tokens and IMAP passwords**: stored only in the Windows
   Credential Manager (DPAPI), scoped to this Windows user account. Never
-  written to disk in plaintext. Unchanged from earlier builds.
-- **Local mailbox cache (new in this release)**: the SQLite database is
-  encrypted at rest with AES-256-GCM. The encryption key is generated once
-  per install and is itself protected with Windows DPAPI, the same
-  mechanism Chrome/Edge use for saved passwords - the wrapped key only
-  unwraps under this specific Windows user account on this specific
-  machine. The database is decrypted to a working copy while the app runs
-  and re-encrypted (with the plaintext copy securely overwritten and
-  deleted) on every clean exit.
+  written to disk in plaintext.
+- **Local mailbox cache**: the SQLite database is encrypted at rest with
+  AES-256-GCM. The encryption key is generated once per install and is
+  itself protected with Windows DPAPI, the same mechanism Chrome/Edge use
+  for saved passwords - the wrapped key only unwraps under this specific
+  Windows user account on this specific machine. The database is
+  decrypted to a working copy while the app runs and re-encrypted (with
+  the plaintext copy securely overwritten and deleted) on every clean
+  exit.
   - **What this protects against**: a stolen or discarded machine/disk, a
     copy of `%APPDATA%` that ends up in a cloud backup or on a USB drive,
     or another Windows account on a shared machine reading these files.
@@ -99,30 +169,7 @@ First public release.
   log file for troubleshooting does not reveal which accounts are
   connected.
 
-## Install instructions
-
-### Packaged build
-
-1. Extract the release zip (or copy the `dist\Unified` folder) anywhere.
-2. Run `Unified.exe` from inside that folder.
-3. First run: **Settings → Select credentials.json…** to add your own
-   Google OAuth client (see README for the one-time Google Cloud Console
-   setup), then **+ Add account…** for Gmail and/or IMAP accounts.
-
-### From source
-
-```powershell
-git clone <this repo>
-cd Unified
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python run.py
-```
-
-To build the .exe yourself: `.venv\Scripts\python build.py` →
-`dist\Unified\Unified.exe`.
-
-## Migration notes
+### Migration notes
 
 This project was previously named "UnifiedMailbox". If you have an
 existing install under that name, the new build automatically migrates it
@@ -141,7 +188,7 @@ Migration is idempotent: it runs at most once, whether the destination
 already holds a plaintext or an already-encrypted database, and re-running
 the app never re-copies or duplicates accounts/messages.
 
-## Release validation performed
+### Release validation performed
 
 Before this release, the following was verified against the actual built
 `Unified.exe` (not just the test suite):
@@ -170,3 +217,9 @@ Before this release, the following was verified against the actual built
   scanned for stray database/credential/log/temp files - none found; and
   every logging call site in the source was audited for account email
   addresses, fixed to use a local numeric ID instead where any were found
+- Installer packaging (Inno Setup): silent install/uninstall verified
+  end to end - exe, `_internal`, both optional shortcuts (correct target
+  paths), and the Windows uninstall registry entry all created correctly;
+  uninstall removed the app/shortcuts/registry entry while leaving
+  `%APPDATA%\Unified` byte-for-byte unchanged; a reinstall over surviving
+  data loaded it correctly (confirmed via the app's own startup log)

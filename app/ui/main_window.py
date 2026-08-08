@@ -1,5 +1,11 @@
 """Main window: sidebar / email list / preview, toolbar, console, sync wiring.
 
+This module owns all business logic (sync wiring, database calls, account
+management) exactly as before the visual redesign - only what renders it
+changed. Every call into app.database, app.services.*, app.security.* is
+unchanged from the pre-redesign version; only widget construction and
+event wiring were replumbed through app.ui.components.
+
 Threading rules kept here:
 - All network work (sync, body fetch, remote flag updates) runs on QThreads.
 - UI reloads triggered by sync signals are coalesced through a single-shot
@@ -8,28 +14,18 @@ Threading rules kept here:
 
 from __future__ import annotations
 
-import html
 import logging
-from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QBrush, QColor, QFont
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QProgressBar,
     QPushButton,
-    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
-    QToolBar,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -54,8 +50,21 @@ from app.services.sync_service import (
     RemoteActionWorker,
     SyncManager,
 )
+from app.ui.account_dialog import AccountDialog
+from app.ui.components.email_list import EmailListView, format_time
+from app.ui.components.loading_state import LoadingState
+from app.ui.components.preview_pane import PreviewPane
+from app.ui.components.sidebar import SidebarWidget
+from app.ui.components.toolbar import TopToolBar
+from app.ui.compose_dialog import ComposeDialog
+from app.ui.console import ConsoleWidget
+from app.ui.icons import make_app_icon
+from app.ui.native_theme import apply_dark_titlebar
+from app.ui.settings_dialog import SettingsDialog
 
-# Friendly first-launch wording for each sync phase (panel display)
+log = logging.getLogger(__name__)
+
+# Friendly first-launch wording for each sync phase (loading-state display)
 PHASE_TEXT = {
     PH_CONNECT: "Connecting account...",
     PH_LIST: "Downloading message list...",
@@ -64,24 +73,15 @@ PHASE_TEXT = {
     PH_INDEX: "Preparing mailbox...",
     PH_VERIFY: "Preparing mailbox...",
 }
-from app.ui.account_dialog import AccountDialog
-from app.ui.compose_dialog import ComposeDialog
-from app.ui.console import ConsoleWidget
-from app.ui.html_view import HtmlMailView
-from app.ui.icons import make_app_icon
-from app.ui.native_theme import apply_white_titlebar
-from app.ui.settings_dialog import SettingsDialog
 
-log = logging.getLogger(__name__)
-
-VIEW_ITEMS = [
-    ("inbox", "Unified Inbox"),
-    ("starred", "Starred"),
-    ("sent", "Sent"),
-    ("trash", "Trash"),
-]
-
-STATUS_GRAY = QBrush(QColor("#666666"))
+# Sync status -> the color key StatusIndicator/theme.STATUS_COLORS understands.
+_STATUS_KEY = {
+    ST_SYNCING: "syncing",
+    ST_WAITING: "waiting",
+    ST_ERROR: "error",
+    ST_PARTIAL: "partial",
+    ST_DONE: "done",
+}
 
 
 class MainWindow(QMainWindow):
@@ -99,14 +99,13 @@ class MainWindow(QMainWindow):
         self._action_workers: list[RemoteActionWorker] = []
         self._body_workers: list[BodyFetchWorker] = []
         self._fetching_body_ids: set[int] = set()
-        self._status_items: dict[int, QTreeWidgetItem] = {}
         self._panel_account_id: int | None = None
         self._extra_limit = 0  # raised by the Load More button
 
         self.setWindowTitle("Unified")
         self.setWindowIcon(make_app_icon())
-        self.resize(1200, 760)
-        apply_white_titlebar(self)
+        self.resize(1280, 800)
+        apply_dark_titlebar(self)
 
         self._build_toolbar()
         self._build_body()
@@ -180,61 +179,28 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ toolbar
 
     def _build_toolbar(self) -> None:
-        toolbar = QToolBar()
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
-
-        compose_btn = QPushButton("Compose")
-        compose_btn.setDefault(True)
-        compose_btn.clicked.connect(self.open_compose)
-        toolbar.addWidget(compose_btn)
-
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.start_sync)
-        toolbar.addWidget(refresh_btn)
-
-        self.console_btn = QPushButton("Console")
-        self.console_btn.setCheckable(True)
-        self.console_btn.toggled.connect(self._toggle_console)
-        toolbar.addWidget(self.console_btn)
-
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
-
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search all accounts...")
-        self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setFixedWidth(320)
-        self.search_edit.textChanged.connect(self._on_search_changed)
-        toolbar.addWidget(self.search_edit)
+        self.toolbar = TopToolBar()
+        self.addToolBar(self.toolbar)
+        self.toolbar.compose_clicked.connect(self.open_compose)
+        self.toolbar.refresh_clicked.connect(self.start_sync)
+        self.toolbar.console_toggled.connect(self._toggle_console)
+        self.toolbar.search_changed.connect(self._on_search_changed)
 
     # --------------------------------------------------------------------- body
 
     def _build_body(self) -> None:
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # -- Sidebar
-        self.sidebar = QTreeWidget()
-        self.sidebar.setHeaderHidden(True)
-        self.sidebar.setRootIsDecorated(False)
-        self.sidebar.setFixedWidth(230)
-        self.sidebar.itemClicked.connect(self._on_sidebar_clicked)
+        self.sidebar = SidebarWidget()
+        self.sidebar.view_selected.connect(self._on_view_selected)
+        self.sidebar.account_selected.connect(self._on_account_selected)
+        self.sidebar.add_account_requested.connect(self.open_add_account)
+        self.sidebar.settings_requested.connect(self.open_settings)
         splitter.addWidget(self.sidebar)
 
-        # -- Email list
-        self.email_list = QTreeWidget()
-        self.email_list.setRootIsDecorated(False)
-        self.email_list.setAlternatingRowColors(True)
-        self.email_list.setHeaderLabels(["", "From", "Subject", "Account", "Time"])
-        self.email_list.setColumnWidth(0, 36)
-        self.email_list.setColumnWidth(1, 150)
-        self.email_list.setColumnWidth(2, 240)
-        self.email_list.setColumnWidth(3, 150)
-        self.email_list.setUniformRowHeights(True)  # fast scrolling on big lists
-        self.email_list.itemSelectionChanged.connect(self._on_email_selected)
-        self.email_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.email_list.customContextMenuRequested.connect(self._email_context_menu)
+        self.email_list = EmailListView()
+        self.email_list.email_selected.connect(self._on_email_selected)
+        self.email_list.context_menu_requested.connect(self._on_email_context_menu)
 
         # List page: the list plus a Load More button that appears whenever
         # the display limit hides messages (so nothing ever looks missing).
@@ -248,88 +214,47 @@ class MainWindow(QMainWindow):
         lp.addWidget(self.email_list, stretch=1)
         lp.addWidget(self.load_more_btn)
 
+        self.loading_state = LoadingState()
+
         self.center_stack = QStackedWidget()
         self.center_stack.addWidget(list_page)
-        self.center_stack.addWidget(self._build_sync_panel())
+        self.center_stack.addWidget(self.loading_state)
         splitter.addWidget(self.center_stack)
 
-        # -- Preview panel
-        preview = QWidget()
-        pv = QVBoxLayout(preview)
-        pv.setContentsMargins(12, 10, 12, 10)
-        pv.setSpacing(6)
-
-        self.preview_subject = QLabel("Select an email")
-        self.preview_subject.setObjectName("heading")
-        self.preview_subject.setWordWrap(True)
-        self.preview_meta = QLabel("")
-        self.preview_meta.setObjectName("secondary")
-        self.preview_meta.setWordWrap(True)
-
-        actions_row = QHBoxLayout()
-        self.star_btn = QPushButton("Star")
-        self.star_btn.clicked.connect(self._toggle_star)
-        self.delete_btn = QPushButton("Delete")
-        self.delete_btn.clicked.connect(self._delete_current)
-        for b in (self.star_btn, self.delete_btn):
-            b.setEnabled(False)
-            actions_row.addWidget(b)
-        actions_row.addStretch(1)
-
-        self.preview_body = HtmlMailView()
-
-        pv.addWidget(self.preview_subject)
-        pv.addWidget(self.preview_meta)
-        pv.addLayout(actions_row)
-        pv.addWidget(self.preview_body, stretch=1)
-        splitter.addWidget(preview)
+        self.preview = PreviewPane()
+        self.preview.star_clicked.connect(self._toggle_star)
+        self.preview.delete_clicked.connect(self._delete_current)
+        splitter.addWidget(self.preview)
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 5)
         splitter.setStretchFactor(2, 4)
-        splitter.setSizes([230, 620, 350])
+        splitter.setSizes([248, 660, 380])
 
         # -- Console under the main area (collapsible, hidden by default)
         self.console = ConsoleWidget()
         self.console.setVisible(False)
 
-        vertical = QSplitter(Qt.Orientation.Vertical)
-        vertical.addWidget(splitter)
-        vertical.addWidget(self.console)
-        vertical.setStretchFactor(0, 4)
-        vertical.setStretchFactor(1, 1)
-        vertical.setSizes([560, 140])
-        self.setCentralWidget(vertical)
+        self._vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._vertical_splitter.addWidget(splitter)
+        self._vertical_splitter.addWidget(self.console)
+        self._vertical_splitter.setStretchFactor(0, 4)
+        self._vertical_splitter.setStretchFactor(1, 1)
+        # The console starts hidden, so it must start at 0 height too - a
+        # QSplitter reserves proportional space for a child regardless of
+        # that child's own visibility, so leaving this at a nonzero size
+        # (e.g. 140) would silently steal that much height from the sidebar/
+        # list/preview above it even while the console is never shown.
+        self._vertical_splitter.setSizes([1, 0])
+        self.setCentralWidget(self._vertical_splitter)
 
     def _toggle_console(self, visible: bool) -> None:
         self.console.setVisible(visible)
-
-    def _build_sync_panel(self) -> QWidget:
-        panel = QWidget()
-        outer = QVBoxLayout(panel)
-        outer.addStretch(2)
-
-        inner = QVBoxLayout()
-        inner.setSpacing(8)
-        self.sync_account_label = QLabel("")
-        self.sync_account_label.setObjectName("heading")
-        self.sync_account_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sync_status_label = QLabel("Syncing mailbox...")
-        self.sync_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sync_bar = QProgressBar()
-        self.sync_bar.setFixedWidth(320)
-        self.sync_bar.setTextVisible(False)
-        self.sync_detail_label = QLabel("")
-        self.sync_detail_label.setObjectName("secondary")
-        self.sync_detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        inner.addWidget(self.sync_account_label)
-        inner.addWidget(self.sync_status_label)
-        inner.addWidget(self.sync_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
-        inner.addWidget(self.sync_detail_label)
-        outer.addLayout(inner)
-        outer.addStretch(3)
-        return panel
+        total = sum(self._vertical_splitter.sizes()) or self.height()
+        if visible:
+            self._vertical_splitter.setSizes([max(1, total - 220), 220])
+        else:
+            self._vertical_splitter.setSizes([total, 0])
 
     # --------------------------------------------------------------------- tray
 
@@ -360,113 +285,70 @@ class MainWindow(QMainWindow):
 
     def reload_sidebar(self) -> None:
         counts = self.db.unread_counts()
-        self.sidebar.clear()
-        self._status_items.clear()
+        accounts = self.db.get_accounts()
+        self.sidebar.set_accounts(accounts, counts["per_account"])
+        self.sidebar.set_inbox_count(counts["total"])
+        self.sidebar.set_current(
+            self.current_view if self.current_account_id is None else None,
+            self.current_account_id,
+        )
+        for account in accounts:
+            self._update_account_status_display(account["id"])
 
-        bold = QFont()
-        bold.setBold(True)
-
-        for view, label in VIEW_ITEMS:
-            text = label
-            if view == "inbox" and counts["total"]:
-                text = f"{label} ({counts['total']})"
-            item = QTreeWidgetItem([text])
-            item.setData(0, Qt.ItemDataRole.UserRole, ("view", view))
-            if view == "inbox":
-                item.setFont(0, bold)
-            self.sidebar.addTopLevelItem(item)
-
-        accounts_header = QTreeWidgetItem(["ACCOUNTS"])
-        accounts_header.setFlags(Qt.ItemFlag.NoItemFlags)
-        self.sidebar.addTopLevelItem(accounts_header)
-
-        for account in self.db.get_accounts():
-            unread = counts["per_account"].get(account["id"], 0)
-            text = f"  {account['email']}"
-            if unread:
-                text += f" ({unread})"
-            item = QTreeWidgetItem([text])
-            item.setData(0, Qt.ItemDataRole.UserRole, ("account", account["id"]))
-            item.setToolTip(0, f"{account['email']} - {account['provider'].upper()}")
-            self.sidebar.addTopLevelItem(item)
-
-            status_text = self._account_status_text(account)
-            status_item = QTreeWidgetItem([f"      {status_text}"])
-            status_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            status_item.setForeground(0, STATUS_GRAY)
-            item.addChild(status_item)
-            self._status_items[account["id"]] = status_item
-            status_item.setHidden(not status_text)
-
-        add_item = QTreeWidgetItem(["  + Add account..."])
-        add_item.setData(0, Qt.ItemDataRole.UserRole, ("add", None))
-        self.sidebar.addTopLevelItem(add_item)
-
-        settings_item = QTreeWidgetItem(["Settings"])
-        settings_item.setData(0, Qt.ItemDataRole.UserRole, ("settings", None))
-        self.sidebar.addTopLevelItem(settings_item)
-        self.sidebar.expandAll()
-
-    def _account_status_text(self, account: dict) -> str:
+    def _account_status(self, account: dict) -> tuple[str, str]:
+        """Return (status_key, display_text) for the sidebar status dot."""
         state = self.sync.status(account["id"])
         status = state["status"]
         if status == ST_SYNCING:
             phase = state.get("phase", PH_CONNECT)
             done, total = state.get("done", 0), state.get("total", 0)
             if total:
-                return f"↻ {phase} {done:,}/{total:,}"
-            if done:  # listing phase reports a running count
-                return f"↻ {phase} ({done:,} found)"
-            return f"↻ {phase}"
+                text = f"{phase} {done:,}/{total:,}"
+            elif done:
+                text = f"{phase} ({done:,} found)"
+            else:
+                text = phase
+            return "syncing", text
         if status == ST_WAITING:
-            return "· Waiting"
+            return "waiting", "Waiting"
         if status == ST_ERROR:
             result = state.get("result", {})
             reason = result.get("error", "unknown error")
-            return f"✗ Failed: {reason[:60]}"
+            return "error", f"Failed: {reason[:60]}"
         if status == ST_PARTIAL:
             result = state.get("result", {})
-            return (f"⚠ {result.get('local_total', 0):,}/"
-                    f"{result.get('server_total', 0):,}"
-                    f" - {result.get('failed', 0)} failed, Refresh to retry")
+            return "partial", (
+                f"{result.get('local_total', 0):,}/{result.get('server_total', 0):,}"
+                f" - {result.get('failed', 0)} failed, Refresh to retry"
+            )
         if status == ST_DONE:
             result = state.get("result", {})
-            return (f"✓ Complete - {result.get('local_total', 0):,}/"
-                    f"{result.get('server_total', 0):,} verified")
+            return "done", (
+                f"Complete - {result.get('local_total', 0):,}/"
+                f"{result.get('server_total', 0):,} verified"
+            )
         if account["initial_sync_completed"]:
-            return "✓ Synced"
-        return ""
+            return "done", "Synced"
+        return "idle", ""
 
-    def _update_status_item(self, account_id: int) -> None:
-        item = self._status_items.get(account_id)
-        if item is None:
-            return
+    def _update_account_status_display(self, account_id: int) -> None:
         account = self.db.get_account(account_id)
         if account is None:
             return
-        text = self._account_status_text(account)
-        item.setText(0, f"      {text}")
-        item.setHidden(not text)
+        status_key, text = self._account_status(account)
+        self.sidebar.update_account_status(account_id, status_key, text)
 
-    def _on_sidebar_clicked(self, item: QTreeWidgetItem) -> None:
-        data = item.data(0, Qt.ItemDataRole.UserRole)
-        if not data:
-            return
-        kind, value = data
-        if kind in ("view", "account"):
-            self._extra_limit = 0  # each view starts at the base display limit
-        if kind == "view":
-            self.current_view = value
-            self.current_account_id = None
-        elif kind == "account":
-            self.current_view = "inbox"
-            self.current_account_id = value
-        elif kind == "add":
-            self.open_add_account()
-            return
-        elif kind == "settings":
-            self.open_settings()
-            return
+    def _on_view_selected(self, view: str) -> None:
+        self._extra_limit = 0
+        self.current_view = view
+        self.current_account_id = None
+        self._update_search_placeholder()
+        self.reload_email_list()
+
+    def _on_account_selected(self, account_id: int) -> None:
+        self._extra_limit = 0
+        self.current_view = "inbox"
+        self.current_account_id = account_id
         self._update_search_placeholder()
         self.reload_email_list()
 
@@ -475,7 +357,7 @@ class MainWindow(QMainWindow):
         account's inbox, or every account combined."""
         text = "Search inbox..." if self.current_account_id is not None \
             else "Search all accounts..."
-        self.search_edit.setPlaceholderText(text)
+        self.toolbar.set_search_placeholder(text)
 
     # --------------------------------------------------------------- email list
 
@@ -487,7 +369,7 @@ class MainWindow(QMainWindow):
         self.reload_sidebar()
         self.reload_email_list()
 
-    def _on_search_changed(self) -> None:
+    def _on_search_changed(self, _text: str) -> None:
         self._extra_limit = 0
         self._search_timer.start()
 
@@ -496,7 +378,7 @@ class MainWindow(QMainWindow):
         self.reload_email_list()
 
     def reload_email_list(self) -> None:
-        search = self.search_edit.text().strip()
+        search = self.toolbar.search_text()
         starred = self.current_view == "starred"
         folder = self.current_view if not starred else "inbox"
         limit = int(self.settings.get("messages_shown")) + self._extra_limit
@@ -514,40 +396,7 @@ class MainWindow(QMainWindow):
             search=search,
         )
 
-        self.email_list.setUpdatesEnabled(False)
-        self.email_list.blockSignals(True)
-        self.email_list.clear()
-        bold = QFont()
-        bold.setBold(True)
-
-        items = []
-        selected_item = None
-        for msg in emails:
-            sender = msg["sender_name"] or msg["sender_email"] or "(unknown)"
-            subject = msg["subject"] or "(no subject)"
-            if msg["has_attachments"]:
-                subject = "[a] " + subject
-            marker = "●" if not msg["is_read"] else ""
-            if msg["is_starred"]:
-                marker = ("★" + marker) if marker else "★"
-            item = QTreeWidgetItem(
-                [marker, sender, subject, msg["account_email"],
-                 self._format_time(msg["date_ts"])]
-            )
-            item.setData(0, Qt.ItemDataRole.UserRole, msg["id"])
-            if not msg["is_read"]:
-                for col in range(5):
-                    item.setFont(col, bold)
-            item.setToolTip(2, msg["snippet"])
-            items.append(item)
-            if msg["id"] == self.current_email_id:
-                selected_item = item
-
-        self.email_list.addTopLevelItems(items)
-        if selected_item is not None:
-            self.email_list.setCurrentItem(selected_item)
-        self.email_list.blockSignals(False)
-        self.email_list.setUpdatesEnabled(True)
+        self.email_list.set_rows(emails, keep_selected_id=self.current_email_id)
 
         shown = len(emails)
         if total > shown:
@@ -584,7 +433,7 @@ class MainWindow(QMainWindow):
         elif (
             email_count == 0
             and self.current_view == "inbox"
-            and not self.search_edit.text().strip()
+            and not self.toolbar.search_text()
         ):
             account = next(
                 (a for a in accounts if self.sync.is_account_pending(a["id"])),
@@ -595,11 +444,10 @@ class MainWindow(QMainWindow):
             self.center_stack.setCurrentIndex(0)
             return
         self._panel_account_id = account["id"]
-        self._update_sync_panel(account)
+        self._update_loading_state(account)
         self.center_stack.setCurrentIndex(1)
 
-    def _update_sync_panel(self, account: dict) -> None:
-        self.sync_account_label.setText(account["email"])
+    def _update_loading_state(self, account: dict) -> None:
         state = self.sync.status(account["id"])
         if state["status"] == ST_SYNCING:
             phase = state.get("phase", PH_CONNECT)
@@ -607,58 +455,29 @@ class MainWindow(QMainWindow):
             friendly = PHASE_TEXT.get(phase, phase + "...")
             if account["provider"] == "gmail" and phase == PH_CONNECT:
                 friendly = "Connecting Gmail..."
-            self.sync_status_label.setText(friendly)
-            if total:
-                self.sync_detail_label.setText(f"{phase}  {done:,} / {total:,}")
-                self.sync_bar.setRange(0, total)
-                self.sync_bar.setValue(done)
-            elif done:
-                self.sync_detail_label.setText(f"{phase}: {done:,} found")
-                self.sync_bar.setRange(0, 0)
-            else:
-                self.sync_detail_label.setText(phase)
-                self.sync_bar.setRange(0, 0)
-        elif state["status"] == ST_WAITING:
-            self.sync_status_label.setText("Waiting to sync...")
-            self.sync_detail_label.setText(
-                "Another account is currently syncing"
+            detail = f"{phase}  {done:,} / {total:,}" if total else (
+                f"{phase}: {done:,} found" if done else phase
             )
-            self.sync_bar.setRange(0, 0)
+            self.loading_state.set_state(
+                account["email"], friendly, detail, done, total
+            )
+        elif state["status"] == ST_WAITING:
+            self.loading_state.set_state(
+                account["email"], "Waiting to sync...",
+                "Another account is currently syncing",
+            )
         else:
-            self.sync_status_label.setText("Loading mailbox...")
-            self.sync_detail_label.setText("Preparing mailbox...")
-            self.sync_bar.setRange(0, 0)
-
-    @staticmethod
-    def _format_time(ts: int) -> str:
-        if not ts:
-            return ""
-        dt = datetime.fromtimestamp(ts)
-        now = datetime.now()
-        if dt.date() == now.date():
-            return dt.strftime("%H:%M")
-        if dt.year == now.year:
-            return dt.strftime("%d %b")
-        return dt.strftime("%d %b %Y")
+            self.loading_state.set_state(
+                account["email"], "Loading mailbox...", "Preparing mailbox...",
+            )
 
     # ------------------------------------------------------------------ preview
 
-    def _show_preview_placeholder(self, title: str, body: str) -> None:
-        self.preview_subject.setText(title)
-        self.preview_meta.setText("")
-        self.preview_body.set_email_text(body)
-        self.star_btn.setEnabled(False)
-        self.delete_btn.setEnabled(False)
-
-    def _on_email_selected(self) -> None:
-        items = self.email_list.selectedItems()
-        if not items:
-            return
-        email_id = items[0].data(0, Qt.ItemDataRole.UserRole)
+    def _on_email_selected(self, email_id: int) -> None:
         msg = self.db.get_email(email_id)
         if not msg:
             # Deleted under us (pruned by sync) - explain, never blank.
-            self._show_preview_placeholder(
+            self.preview.show_placeholder(
                 "Message unavailable",
                 "This message is no longer available.\n\n"
                 "It may have been deleted or moved on the server.",
@@ -666,25 +485,21 @@ class MainWindow(QMainWindow):
             return
         self.current_email_id = email_id
 
-        self.preview_subject.setText(msg["subject"] or "(no subject)")
-        sender = msg["sender_name"] or msg["sender_email"]
-        meta = (
-            f"From: {html.escape(sender)} &lt;{html.escape(msg['sender_email'])}&gt;<br>"
-            f"To: {html.escape(msg['recipients'] or '')}<br>"
-            f"Account: {html.escape(msg['account_email'])}"
-            f" &nbsp;|&nbsp; {self._format_time(msg['date_ts'])}"
+        self.preview.show_message(
+            subject=msg["subject"],
+            sender_name=msg["sender_name"],
+            sender_email=msg["sender_email"],
+            recipients=msg["recipients"] or "",
+            account_email=msg["account_email"],
+            time_text=format_time(msg["date_ts"]),
+            has_attachments=bool(msg["has_attachments"]),
+            is_starred=bool(msg["is_starred"]),
         )
-        if msg["has_attachments"]:
-            meta += " &nbsp;|&nbsp; has attachments"
-        self.preview_meta.setText(meta)
-        self.star_btn.setEnabled(True)
-        self.delete_btn.setEnabled(True)
-        self.star_btn.setText("Unstar" if msg["is_starred"] else "Star")
 
         if msg["body_fetched"]:
             self._render_body(msg)
         else:
-            self.preview_body.set_email_text(
+            self.preview.body.set_email_text(
                 "Loading email...\n\nDownloading message content..."
             )
             self._start_body_fetch(msg)
@@ -696,20 +511,20 @@ class MainWindow(QMainWindow):
 
     def _render_body(self, msg: dict) -> None:
         if msg["body_html"]:
-            self.preview_body.set_email_html(msg["body_html"])
+            self.preview.body.set_email_html(msg["body_html"])
         elif msg["body_text"]:
-            self.preview_body.set_email_text(msg["body_text"])
+            self.preview.body.set_email_text(msg["body_text"])
         elif msg["snippet"]:
-            self.preview_body.set_email_text(msg["snippet"])
+            self.preview.body.set_email_text(msg["snippet"])
         else:
-            self.preview_body.set_email_text("(This message has no content.)")
+            self.preview.body.set_email_text("(This message has no content.)")
 
     def _start_body_fetch(self, msg: dict) -> None:
         if msg["id"] in self._fetching_body_ids:
             return  # rapid re-click on the same email: one fetch is enough
         account = self.db.get_account(msg["account_id"])
         if account is None:
-            self._show_preview_placeholder(
+            self.preview.show_placeholder(
                 "Message unavailable", "The account for this message was removed."
             )
             return
@@ -732,18 +547,16 @@ class MainWindow(QMainWindow):
         msg = self.db.get_email(email_id)
         if msg is None:
             return
-        self.preview_body.set_email_text("Rendering preview...")
+        self.preview.body.set_email_text("Rendering preview...")
         self._render_body(msg)
         if msg["has_attachments"]:
             # Attachment flag becomes known only after the full fetch.
-            current = self.preview_meta.text()
-            if "has attachments" not in current:
-                self.preview_meta.setText(current + " &nbsp;|&nbsp; has attachments")
+            self.preview.set_attachment_visible(True)
 
     def _on_body_failed(self, email_id: int, reason: str) -> None:
         if email_id != self.current_email_id:
             return
-        self.preview_body.set_email_text(
+        self.preview.body.set_email_text(
             "Could not load this message.\n\n"
             f"{reason}\n\nSelect the message again to retry."
         )
@@ -774,7 +587,7 @@ class MainWindow(QMainWindow):
         new_state = not msg["is_starred"]
         self.db.set_starred(self.current_email_id, new_state)
         self._remote_action(msg, "star", new_state)
-        self.star_btn.setText("Unstar" if new_state else "Star")
+        self.preview.set_starred(new_state)
         self._schedule_reload()
 
     def _delete_current(self) -> None:
@@ -791,15 +604,11 @@ class MainWindow(QMainWindow):
         self.db.move_to_trash(self.current_email_id)
         self._remote_action(msg, "trash")
         self.current_email_id = None
-        self._show_preview_placeholder("Select an email", "")
+        self.preview.show_placeholder("Select an email", "")
         self.reload_email_list()
         self.reload_sidebar()
 
-    def _email_context_menu(self, pos) -> None:
-        item = self.email_list.itemAt(pos)
-        if not item:
-            return
-        email_id = item.data(0, Qt.ItemDataRole.UserRole)
+    def _on_email_context_menu(self, email_id: int, global_pos) -> None:
         msg = self.db.get_email(email_id)
         if not msg:
             return
@@ -809,7 +618,7 @@ class MainWindow(QMainWindow):
         )
         star = menu.addAction("Unstar" if msg["is_starred"] else "Star")
         delete = menu.addAction("Delete")
-        chosen = menu.exec(self.email_list.viewport().mapToGlobal(pos))
+        chosen = menu.exec(global_pos)
         if chosen == mark:
             new_read = not msg["is_read"]
             self.db.set_read(email_id, new_read)
@@ -841,19 +650,19 @@ class MainWindow(QMainWindow):
     def _on_account_progress(
         self, account_id: int, phase: str, done: int, total: int
     ) -> None:
-        self._update_status_item(account_id)
+        self._update_account_status_display(account_id)
         if self._panel_account_id == account_id:
             account = self.db.get_account(account_id)
             if account:
-                self._update_sync_panel(account)
+                self._update_loading_state(account)
         self._schedule_reload()
 
     def _on_sync_state_changed(self, account_id: int) -> None:
-        self._update_status_item(account_id)
+        self._update_account_status_display(account_id)
         if self._panel_account_id == account_id:
             account = self.db.get_account(account_id)
             if account:
-                self._update_sync_panel(account)
+                self._update_loading_state(account)
 
     def _on_account_done(self, account_id: int, result: dict) -> None:
         account = self.db.get_account(account_id)

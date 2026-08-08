@@ -1,7 +1,7 @@
 ; Inno Setup 6 script for Unified.
 ;
 ; Packages the PyInstaller output (dist\Unified\) into a single
-; distributable installer: Unified-Setup-v1.0.0.exe. Run build.py first
+; distributable installer: Unified-Setup-v1.0.1.exe. Run build.py first
 ; to produce dist\Unified\ before compiling this script.
 ;
 ; Compile with:
@@ -12,7 +12,7 @@
 ; parallel install instead of replacing the old one in place.
 
 #define MyAppName "Unified"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "preinfection"
 #define MyAppExeName "Unified.exe"
 #define MyDistDir "..\dist\Unified"

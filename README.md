@@ -1,14 +1,14 @@
 # Unified
 
 A lightweight Windows desktop email client that combines multiple email
-accounts into one inbox. Built with Python, PySide6 and SQLite - simple,
-black-and-white, and fast even at 20,000+ cached messages.
+accounts into one inbox. Built with Python, PySide6 and SQLite - a clean,
+modern dark interface that stays fast even at 20,000+ cached messages.
 
 ![Unified main window](assets/screenshot.png)
 
 ## Installation
 
-**For most users:** download `Unified-Setup-v1.0.0.exe` from the
+**For most users:** download `Unified-Setup-v1.0.1.exe` from the
 [Releases](../../releases) page and run it. No Python, no terminal, no
 manual copying required.
 
@@ -158,7 +158,7 @@ command line:
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\Unified.iss
 ```
 
-Output: `release\Unified-Setup-v1.0.0.exe`. The installer's `AppId` is
+Output: `release\Unified-Setup-v1.0.1.exe`. The installer's `AppId` is
 fixed (see the comment at the top of the `.iss` file) so future versions
 upgrade in place instead of installing side by side - do not regenerate it.
 
