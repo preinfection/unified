@@ -22,9 +22,11 @@ from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QStyleOpti
 
 from app.ui import theme as t
 from app.ui.components.avatar import paint_avatar
+from app.ui.svg_icon import tinted_pixmap
 
 ROW_HEIGHT = 60
 _AVATAR_SIZE = 34
+_ROW_ICON_SIZE = 13
 ROLE_MSG = Qt.ItemDataRole.UserRole
 
 
@@ -141,28 +143,40 @@ class EmailRowDelegate(QStyledItemDelegate):
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, time_text,
         )
 
-        # -- bottom line: subject - snippet, plus attachment/star glyphs
+        # -- bottom line: real star/attachment icons, then subject - snippet
         bottom_y = top_y + fm.height() + 4
         subject = msg["subject"] or "(no subject)"
-        prefix = ""
-        if msg["is_starred"]:
-            prefix += "★ "  # star
-        if msg["has_attachments"]:
-            prefix += "\U0001F4CE "  # paperclip
         subject_font = QFont(painter.font())
         subject_font.setBold(unread)
         subject_font.setPixelSize(12)
-        painter.setFont(subject_font)
         fm2 = QFontMetrics(subject_font)
-        combined = f"{prefix}{subject}"
+
+        icon_x = text_left
+        icon_y = bottom_y + (fm2.height() - _ROW_ICON_SIZE) / 2
+        if msg["is_starred"]:
+            painter.drawPixmap(
+                int(icon_x), int(icon_y),
+                tinted_pixmap("star_filled", _ROW_ICON_SIZE, t.STARRED),
+            )
+            icon_x += _ROW_ICON_SIZE + 4
+        if msg["has_attachments"]:
+            painter.drawPixmap(
+                int(icon_x), int(icon_y),
+                tinted_pixmap("attachment", _ROW_ICON_SIZE, t.TEXT_TERTIARY),
+            )
+            icon_x += _ROW_ICON_SIZE + 5
+
+        text_start = icon_x
+        combined = subject
         if msg.get("snippet"):
             combined += "  –  " + msg["snippet"]
         painter.setPen(t.qcolor(t.TEXT_PRIMARY if unread else t.TEXT_SECONDARY))
+        painter.setFont(subject_font)
         elided_subject = fm2.elidedText(
-            combined, Qt.TextElideMode.ElideRight, int(text_width)
+            combined, Qt.TextElideMode.ElideRight, int(text_right - text_start)
         )
         painter.drawText(
-            QRectF(text_left, bottom_y, text_width, fm2.height()),
+            QRectF(text_start, bottom_y, text_right - text_start, fm2.height()),
             Qt.AlignmentFlag.AlignVCenter, elided_subject,
         )
 

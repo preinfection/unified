@@ -18,12 +18,21 @@ STYLESHEET = f"""
     color: {t.TEXT_PRIMARY};
 }}
 
-QMainWindow, QDialog {{
-    background: {t.BG_APP};
-}}
 QWidget {{
     background: transparent;
     color: {t.TEXT_PRIMARY};
+}}
+/* Must come AFTER the QWidget rule above: Qt's stylesheet cascade treats
+   "QMainWindow, QDialog" and "QWidget" as equal specificity here and
+   breaks the tie by text order, not by subclass depth. With QWidget's
+   "background: transparent" listed second it wins, and a transparent
+   top-level QDialog/QMainWindow paints as opaque black instead of
+   showing through - any gap not covered by a specifically-styled child
+   widget (e.g. bare space between a QFormLayout row and a
+   QDialogButtonBox) renders as a black hole instead of the app
+   background. Listing it second here makes the real background win. */
+QMainWindow, QDialog {{
+    background: {t.BG_APP};
 }}
 /* QStackedWidget's page container doesn't reliably composite a
    "transparent" background through to the dialog behind it (the same
@@ -46,6 +55,13 @@ QSpinBox:focus, QComboBox:focus {{
     border: 1px solid {t.ACCENT};
 }}
 QLineEdit::placeholder {{ color: {t.TEXT_TERTIARY}; }}
+QLineEdit#searchField {{
+    background: {t.BG_PANEL};
+    border: 1px solid {t.BORDER};
+    border-radius: 15px;
+    padding: 5px 10px 5px 8px;
+}}
+QLineEdit#searchField:focus {{ border: 1px solid {t.ACCENT}; }}
 QComboBox::drop-down {{ border: none; width: 20px; }}
 QComboBox::down-arrow {{
     image: none;
@@ -93,7 +109,7 @@ QPushButton#iconButton {{
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
-    padding: 5px 10px;
+    padding: 6px;
     font-weight: 500;
 }}
 QPushButton#iconButton:hover {{ background: {t.BG_HOVER}; }}
@@ -295,12 +311,13 @@ QWidget#previewCard {{
     border: 1px solid {t.BORDER};
     border-radius: 10px;
 }}
-QLabel#attachmentChip {{
+QWidget#attachmentChip {{
     background: {t.BG_SELECTED};
-    color: {t.TEXT_SECONDARY};
     border: 1px solid {t.BORDER_LIGHT};
     border-radius: 6px;
-    padding: 4px 10px;
+}}
+QWidget#attachmentChip QLabel {{
+    color: {t.TEXT_SECONDARY};
     font-size: 12px;
 }}
 

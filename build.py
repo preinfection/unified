@@ -8,6 +8,7 @@ Output: dist/Unified/Unified.exe
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +66,13 @@ def build() -> int:
         "--windowed",                       # no console window
         "--name", "Unified",
         "--icon", str(ICON),
+        # Real SVG icon assets (app/ui/svg_icon.py resolves these relative
+        # to its own frozen location, landing at _internal\assets\icons in
+        # the onedir output) - without this the app crashes on first paint
+        # with "Missing icon asset", since PyInstaller only bundles Python
+        # code by default, never loose non-Python data files it can't see
+        # referenced anywhere in the source.
+        "--add-data", f"{ROOT / 'assets' / 'icons'}{os.pathsep}assets/icons",
         # Google API client ships bundled discovery documents as data files.
         "--collect-data", "googleapiclient",
         # Keyring discovers its Windows backend at runtime.

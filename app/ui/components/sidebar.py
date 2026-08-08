@@ -10,7 +10,7 @@ because progress ticks can arrive several times a second while syncing.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QLabel,
@@ -21,14 +21,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.ui import theme as t
 from app.ui.components.account_item import AccountItem
+from app.ui.svg_icon import icon_set
 
 VIEW_ITEMS = [
-    ("inbox", "Unified Inbox"),
-    ("starred", "Starred"),
-    ("sent", "Sent"),
-    ("trash", "Trash"),
+    ("inbox", "Unified Inbox", "inbox"),
+    ("starred", "Starred", "starred_nav"),
+    ("sent", "Sent", "sent"),
+    ("trash", "Trash", "trash"),
 ]
+_NAV_ICON_SIZE = 17
+
+
+def _nav_icon(name: str):
+    return icon_set(
+        name, _NAV_ICON_SIZE,
+        normal=t.ICON_SECONDARY, active=t.ICON_ACTIVE, selected=t.ICON_SELECTED,
+    )
 
 
 class SidebarWidget(QWidget):
@@ -53,11 +63,13 @@ class SidebarWidget(QWidget):
         self._nav_buttons: dict[str, QPushButton] = {}
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
-        for view, label in VIEW_ITEMS:
-            btn = QPushButton(label)
+        for view, label, icon_name in VIEW_ITEMS:
+            btn = QPushButton(f"  {label}")
             btn.setObjectName("navPill")
             btn.setCheckable(True)
             btn.setFlat(True)
+            btn.setIcon(_nav_icon(icon_name))
+            btn.setIconSize(QSize(_NAV_ICON_SIZE, _NAV_ICON_SIZE))
             btn.clicked.connect(lambda _=False, v=view: self._on_nav_clicked(v))
             self._nav_group.addButton(btn)
             self._nav_buttons[view] = btn
@@ -82,15 +94,19 @@ class SidebarWidget(QWidget):
         scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         root.addWidget(scroll, stretch=1)
 
-        add_btn = QPushButton("+  Add account...")
+        add_btn = QPushButton("  Add account...")
         add_btn.setObjectName("navPill")
         add_btn.setFlat(True)
+        add_btn.setIcon(_nav_icon("add_circle"))
+        add_btn.setIconSize(QSize(_NAV_ICON_SIZE, _NAV_ICON_SIZE))
         add_btn.clicked.connect(self.add_account_requested.emit)
         root.addWidget(add_btn)
 
-        settings_btn = QPushButton("Settings")
+        settings_btn = QPushButton("  Settings")
         settings_btn.setObjectName("navPill")
         settings_btn.setFlat(True)
+        settings_btn.setIcon(_nav_icon("settings"))
+        settings_btn.setIconSize(QSize(_NAV_ICON_SIZE, _NAV_ICON_SIZE))
         settings_btn.clicked.connect(self.settings_requested.emit)
         root.addWidget(settings_btn)
 
@@ -106,7 +122,7 @@ class SidebarWidget(QWidget):
         self.view_selected.emit(view)
 
     def set_inbox_count(self, total_unread: int) -> None:
-        label = "Unified Inbox"
+        label = "  Unified Inbox"
         if total_unread:
             label += f"  ({total_unread})"
         self._nav_buttons["inbox"].setText(label)

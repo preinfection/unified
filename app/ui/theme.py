@@ -50,6 +50,44 @@ STATUS_COLORS = {
     "idle": TEXT_TERTIARY,
 }
 
+# ------------------------------------------------------------------ spacing
+# A single 4px-based scale, used consistently instead of ad-hoc pixel
+# values scattered through each widget's layout code.
+SPACE_XS = 4
+SPACE_SM = 8
+SPACE_MD = 12
+SPACE_LG = 16
+SPACE_XL = 24
+
+# --------------------------------------------------------------- typography
+# Weight tiers used for hierarchy instead of relying on color/size alone -
+# matches how native mail clients distinguish sender/subject/snippet.
+WEIGHT_REGULAR = 400
+WEIGHT_MEDIUM = 500
+WEIGHT_SEMIBOLD = 600
+WEIGHT_BOLD = 700
+
+# --------------------------------------------------------------------- icons
+ICON_SECONDARY = TEXT_SECONDARY   # default icon color (inactive)
+ICON_ACTIVE = TEXT_PRIMARY        # hovered
+ICON_SELECTED = ACCENT            # checked/pressed
+ICON_DISABLED = TEXT_TERTIARY
+
 
 def qcolor(hex_value: str) -> QColor:
     return QColor(hex_value)
+
+
+def apply_soft_shadow(widget, blur: int = 24, y_offset: int = 6,
+                      alpha: int = 110) -> None:
+    """Attach a real, soft drop shadow to an elevated surface (cards,
+    dialogs). Qt Style Sheets have no box-shadow property, so this is done
+    with QGraphicsDropShadowEffect instead of faking depth with borders.
+    """
+    from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setOffset(0, y_offset)
+    effect.setColor(QColor(0, 0, 0, alpha))
+    widget.setGraphicsEffect(effect)

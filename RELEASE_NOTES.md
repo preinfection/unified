@@ -1,5 +1,74 @@
 # Unified
 
+## v1.1.0
+
+Major visual/UX redesign on top of the v1.0.1 dark theme. No backend,
+sync, database, encryption, or installer *logic* changed - only the
+presentation layer, on the same real-icon-based direction v1.0.1 started.
+
+### What changed
+
+- **Real vector icon system**: every icon in the app - toolbar (Compose,
+  Refresh, Console, search), sidebar navigation (Unified Inbox, Starred,
+  Sent, Trash, Add account, Settings), message list rows (star,
+  attachment), the reading pane's Star/Delete actions, and the message
+  context menu - is now a real SVG asset (`app/ui/svg_icon.py`,
+  `assets/icons/`), tinted per Qt icon mode (Normal/Active/Selected/
+  Disabled) instead of Unicode glyphs or emoji. Icons share a consistent
+  24x24 stroke-based visual language, sized and aligned to match the
+  surrounding text baseline, with real hover/active/selected/disabled
+  states driven by Qt's icon-state machine rather than manual styling.
+- **Spacing and typography tokens** (`app/ui/theme.py`): a shared
+  4/8/12/16/24px spacing scale and named font weights, so components
+  built at different times stop drifting from each other.
+- **Genuine soft shadows**: the reading pane's header card now casts a
+  real `QGraphicsDropShadowEffect` shadow (Qt stylesheets have no
+  `box-shadow` equivalent), giving it actual elevation instead of just a
+  border.
+- **Search field redesign**: the toolbar search box is now a distinct
+  pill-shaped control with a leading search icon, instead of a plain
+  rectangular `QLineEdit`.
+- **Reading pane identity block rebuilt**: sender email / recipients /
+  account+time are now three separate lines instead of one long
+  `a | b | c` string - the previous version could wrap mid-separator on
+  long recipient lists and strand a lone `|` on its own line.
+- **Icon-only secondary toolbar actions**: Refresh and Console are
+  icon-only with tooltips (the native desktop-app convention - Compose
+  keeps its label as the one primary action worth spelling out).
+
+### Fixed during the redesign (found via testing, not requested changes)
+
+- A Qt stylesheet cascade ordering bug: `QWidget { background:
+  transparent; }` and `QMainWindow, QDialog { background: ... }` were
+  being treated as equal specificity and resolved by text order, with
+  the transparent rule listed second and winning. In practice this meant
+  any gap in a dialog not covered by an explicitly-styled child widget
+  (e.g. the space around a bare `QFormLayout` row or a
+  `QDialogButtonBox`) rendered as solid black instead of the app's
+  charcoal background - reproduced and confirmed in the Add Account,
+  Settings, and Compose dialogs, fixed by reordering the two rules so the
+  real background wins the tie.
+- The attachment chip's QSS selector still targeted `QLabel#attachmentChip`
+  after the chip was rebuilt as a composite icon+text `QWidget`; updated
+  to `QWidget#attachmentChip`.
+- Fixed-size 34x34 icon-only toolbar buttons used asymmetric padding
+  (`5px 10px`) sized for icon+text buttons, which shrank the usable
+  content rect narrower than the 18px icon itself; padding is now
+  symmetric.
+
+### Untouched in this release
+
+Gmail API integration, OAuth authentication, account storage, the
+encryption system, DPAPI handling, the SQLite schema, sync workers,
+background threads, email fetching, MIME parsing, the search backend,
+notifications, and the build/installer *scripts* (only the version
+number changed in `installer/Unified.iss`, `AppId` deliberately kept
+identical so this upgrades in place over v1.0.1) - verified by diff, not
+just by intent: the full pre-existing test suite (54 tests) passes
+unchanged.
+
+---
+
 ## v1.0.1
 
 UI redesign. No backend, sync, database, encryption, or installer *logic*

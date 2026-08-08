@@ -7,7 +7,7 @@ attachment list, so no per-file chips are fabricated).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -17,10 +17,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.ui import theme as t
 from app.ui.components.avatar import paint_avatar
 from app.ui.html_view import HtmlMailView
+from app.ui.svg_icon import icon_set, simple_icon
 
 _AVATAR_SIZE = 40
+_ACTION_ICON_SIZE = 16
 
 
 class _HeaderAvatar(QWidget):
@@ -70,19 +73,33 @@ class PreviewPane(QWidget):
         self._sender_name.setObjectName("heading")
         self._sender_name.setWordWrap(True)
         self._sender_name.setTextFormat(Qt.TextFormat.PlainText)
-        self._sender_meta = QLabel("")
-        self._sender_meta.setObjectName("secondary")
-        self._sender_meta.setWordWrap(True)
-        self._sender_meta.setTextFormat(Qt.TextFormat.PlainText)
+        # Two separate lines rather than one long "a | b | c" string - a
+        # single wrapped QLabel breaks mid-separator and strands lone "|"
+        # characters on their own line once the text gets long.
+        self._sender_email_line = QLabel("")
+        self._sender_email_line.setObjectName("secondary")
+        self._sender_email_line.setWordWrap(True)
+        self._sender_email_line.setTextFormat(Qt.TextFormat.PlainText)
+        self._sender_meta_line = QLabel("")
+        self._sender_meta_line.setObjectName("tertiary")
+        self._sender_meta_line.setWordWrap(True)
+        self._sender_meta_line.setTextFormat(Qt.TextFormat.PlainText)
         identity_col.addWidget(self._sender_name)
-        identity_col.addWidget(self._sender_meta)
+        identity_col.addWidget(self._sender_email_line)
+        identity_col.addWidget(self._sender_meta_line)
         header_row.addLayout(identity_col, stretch=1)
 
-        self.star_btn = QPushButton("Star")
+        self.star_btn = QPushButton(" Star")
         self.star_btn.setObjectName("iconButton")
+        self.star_btn.setIconSize(QSize(_ACTION_ICON_SIZE, _ACTION_ICON_SIZE))
         self.star_btn.clicked.connect(self.star_clicked.emit)
-        self.delete_btn = QPushButton("Delete")
+        self.delete_btn = QPushButton(" Delete")
         self.delete_btn.setObjectName("iconButton")
+        self.delete_btn.setIcon(icon_set(
+            "trash", _ACTION_ICON_SIZE, normal=t.ICON_SECONDARY,
+            active=t.ERROR, disabled=t.ICON_DISABLED,
+        ))
+        self.delete_btn.setIconSize(QSize(_ACTION_ICON_SIZE, _ACTION_ICON_SIZE))
         self.delete_btn.clicked.connect(self.delete_clicked.emit)
         for b in (self.star_btn, self.delete_btn):
             b.setEnabled(False)
@@ -95,8 +112,15 @@ class PreviewPane(QWidget):
         self._subject.setTextFormat(Qt.TextFormat.PlainText)
         card_layout.addWidget(self._subject)
 
-        self._attachment_chip = QLabel("\U0001F4CE  Has attachment")
+        self._attachment_chip = QWidget()
         self._attachment_chip.setObjectName("attachmentChip")
+        chip_layout = QHBoxLayout(self._attachment_chip)
+        chip_layout.setContentsMargins(10, 4, 12, 4)
+        chip_layout.setSpacing(6)
+        chip_icon = QLabel()
+        chip_icon.setPixmap(simple_icon("attachment", 13, t.TEXT_SECONDARY).pixmap(13, 13))
+        chip_layout.addWidget(chip_icon)
+        chip_layout.addWidget(QLabel("Has attachment"))
         self._attachment_chip.setVisible(False)
         chip_row = QHBoxLayout()
         chip_row.addWidget(self._attachment_chip)
@@ -104,15 +128,18 @@ class PreviewPane(QWidget):
         card_layout.addLayout(chip_row)
 
         outer.addWidget(card)
+        t.apply_soft_shadow(card, blur=28, y_offset=8, alpha=90)
 
         self.body = HtmlMailView()
         outer.addWidget(self.body, stretch=1)
+        self.set_starred(False)  # give the Star button its initial icon
 
     # ------------------------------------------------------------------ api
 
     def show_placeholder(self, title: str, body_text: str = "") -> None:
         self._sender_name.setText(title)
-        self._sender_meta.setText("")
+        self._sender_email_line.setText("")
+        self._sender_meta_line.setText("")
         self._subject.setText("")
         self._attachment_chip.setVisible(False)
         self._avatar.set_identity("", "")
@@ -129,13 +156,14 @@ class PreviewPane(QWidget):
     ) -> None:
         display_name = sender_name or sender_email or "(unknown sender)"
         self._sender_name.setText(display_name)
-        meta_parts = []
-        if sender_email and sender_email != display_name:
-            meta_parts.append(sender_email)
+
+        email_line = sender_email if sender_email and sender_email != display_name else ""
         if recipients:
-            meta_parts.append(f"To: {recipients}")
-        meta_parts.append(f"{account_email}  ·  {time_text}")
-        self._sender_meta.setText("   |   ".join(meta_parts))
+            email_line = f"{email_line}   ·   To: {recipients}" if email_line else f"To: {recipients}"
+        self._sender_email_line.setText(email_line)
+        self._sender_email_line.setVisible(bool(email_line))
+
+        self._sender_meta_line.setText(f"{account_email}  ·  {time_text}")
         self._subject.setText(subject or "(no subject)")
         self._avatar.set_identity(sender_name, sender_email)
         self._attachment_chip.setVisible(has_attachments)
@@ -147,7 +175,13 @@ class PreviewPane(QWidget):
         self.delete_btn.setEnabled(enabled)
 
     def set_starred(self, starred: bool) -> None:
-        self.star_btn.setText("Unstar" if starred else "Star")
+        self.star_btn.setText(" Unstar" if starred else " Star")
+        icon_name = "star_filled" if starred else "star_outline"
+        color = t.STARRED if starred else t.ICON_SECONDARY
+        self.star_btn.setIcon(icon_set(
+            icon_name, _ACTION_ICON_SIZE, normal=color, active=t.STARRED,
+            disabled=t.ICON_DISABLED,
+        ))
 
     def set_attachment_visible(self, visible: bool) -> None:
         self._attachment_chip.setVisible(visible)

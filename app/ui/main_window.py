@@ -61,6 +61,8 @@ from app.ui.console import ConsoleWidget
 from app.ui.icons import make_app_icon
 from app.ui.native_theme import apply_dark_titlebar
 from app.ui.settings_dialog import SettingsDialog
+from app.ui import theme as t
+from app.ui.svg_icon import simple_icon
 
 log = logging.getLogger(__name__)
 
@@ -616,8 +618,14 @@ class MainWindow(QMainWindow):
         mark = menu.addAction(
             "Mark as unread" if msg["is_read"] else "Mark as read"
         )
-        star = menu.addAction("Unstar" if msg["is_starred"] else "Star")
-        delete = menu.addAction("Delete")
+        star_icon_name = "star_filled" if msg["is_starred"] else "star_outline"
+        star = menu.addAction(
+            simple_icon(star_icon_name, 15, t.ICON_SECONDARY),
+            "Unstar" if msg["is_starred"] else "Star",
+        )
+        delete = menu.addAction(
+            simple_icon("trash", 15, t.ICON_SECONDARY), "Delete"
+        )
         chosen = menu.exec(global_pos)
         if chosen == mark:
             new_read = not msg["is_read"]
