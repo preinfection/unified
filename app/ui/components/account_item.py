@@ -44,8 +44,8 @@ class AccountItem(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(10, 7, 10, 7)
-        outer.setSpacing(10)
+        outer.setContentsMargins(t.SPACE_SM, t.SPACE_SM - 1, t.SPACE_SM, t.SPACE_SM - 1)
+        outer.setSpacing(t.SPACE_SM)
 
         outer.addWidget(_Avatar(account["email"]))
 
@@ -53,9 +53,10 @@ class AccountItem(QWidget):
         text_col.setSpacing(1)
 
         top_row = QHBoxLayout()
-        top_row.setSpacing(6)
+        top_row.setSpacing(t.SPACE_XS + 2)
         self._email_label = QLabel(account["email"])
         self._email_label.setObjectName("accountEmail")
+        self._email_label.setFont(t.make_font("account_label"))
         top_row.addWidget(self._email_label, stretch=1)
         self._badge = QLabel("")
         self._badge.setObjectName("unreadBadge")
@@ -92,6 +93,6 @@ class AccountItem(QWidget):
         else:
             bg = "transparent"
         self.setStyleSheet(
-            f"QWidget#accountItem {{ background: {bg}; border-radius: 8px; }}"
+            f"QWidget#accountItem {{ background: {bg}; border-radius: {t.RADIUS_MD}px; }}"
             f"QWidget#accountItem:hover {{ background: {t.BG_HOVER}; }}"
         )

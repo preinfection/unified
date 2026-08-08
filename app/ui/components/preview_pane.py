@@ -1,7 +1,8 @@
-"""Reading pane: an elevated sender-info card (matching the reference's
-drawer header treatment) above the message body. Only ever shows fields
-Unified actually has - sender, recipients, account, timestamp, and a
-generic "has attachment" indicator (the data model has no per-file
+"""Reading pane: an elevated sender-info card above the message body when
+a message is open, or a quiet centered empty state when nothing is
+selected - never a half-empty card with blank fields. Only ever shows
+fields Unified actually has - sender, recipients, account, timestamp,
+and a generic "has attachment" indicator (the data model has no per-file
 attachment list, so no per-file chips are fabricated).
 """
 
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -22,8 +24,7 @@ from app.ui.components.avatar import paint_avatar
 from app.ui.html_view import HtmlMailView
 from app.ui.svg_icon import icon_set, simple_icon
 
-_AVATAR_SIZE = 40
-_ACTION_ICON_SIZE = 16
+_AVATAR_SIZE = 42
 
 
 class _HeaderAvatar(QWidget):
@@ -45,6 +46,42 @@ class _HeaderAvatar(QWidget):
         )
 
 
+class _EmptyState(QWidget):
+    """Shown when no message is selected - a real placeholder, not a
+    mostly-blank card. `set_text` lets MainWindow reuse this for the
+    "message unavailable" case too."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        col = QVBoxLayout(self)
+        col.addStretch(2)
+
+        icon = QLabel()
+        icon.setPixmap(simple_icon("paper", 40, t.BORDER_LIGHT).pixmap(40, 40))
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(icon)
+        col.addSpacing(t.SPACE_MD)
+
+        self._title = QLabel("Select a message")
+        self._title.setFont(t.make_font("dialog_heading"))
+        self._title.setStyleSheet(f"color: {t.TEXT_SECONDARY};")
+        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(self._title)
+
+        self._detail = QLabel("Choose an email from the list to read it here.")
+        self._detail.setFont(t.make_font("body"))
+        self._detail.setStyleSheet(f"color: {t.TEXT_TERTIARY};")
+        self._detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._detail.setWordWrap(True)
+        col.addWidget(self._detail)
+        col.addStretch(3)
+
+    def set_text(self, title: str, detail: str) -> None:
+        self._title.setText(title)
+        self._detail.setText(detail)
+        self._detail.setVisible(bool(detail))
+
+
 class PreviewPane(QWidget):
     star_clicked = Signal()
     delete_clicked = Signal()
@@ -52,25 +89,37 @@ class PreviewPane(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 12, 14, 12)
-        outer.setSpacing(10)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._stack = QStackedWidget()
+        outer.addWidget(self._stack)
+
+        self._empty = _EmptyState()
+        self._stack.addWidget(self._empty)
+
+        message_page = QWidget()
+        page_col = QVBoxLayout(message_page)
+        page_col.setContentsMargins(t.SPACE_LG - 2, t.SPACE_MD, t.SPACE_LG - 2, t.SPACE_MD)
+        page_col.setSpacing(t.SPACE_SM + 2)
 
         # -- elevated sender-info card
         card = QWidget()
         card.setObjectName("previewCard")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(16, 14, 16, 14)
-        card_layout.setSpacing(10)
+        card_layout.setContentsMargins(t.SPACE_LG, t.SPACE_MD + 2, t.SPACE_LG, t.SPACE_MD + 2)
+        card_layout.setSpacing(t.SPACE_SM + 2)
 
         header_row = QHBoxLayout()
-        header_row.setSpacing(12)
+        header_row.setSpacing(t.SPACE_MD)
         self._avatar = _HeaderAvatar()
         header_row.addWidget(self._avatar)
 
         identity_col = QVBoxLayout()
         identity_col.setSpacing(1)
-        self._sender_name = QLabel("Select an email")
-        self._sender_name.setObjectName("heading")
+        self._sender_name = QLabel("")
+        self._sender_name.setFont(t.make_font("sender"))
+        self._sender_name.setStyleSheet(f"color: {t.TEXT_PRIMARY};")
         self._sender_name.setWordWrap(True)
         self._sender_name.setTextFormat(Qt.TextFormat.PlainText)
         # Two separate lines rather than one long "a | b | c" string - a
@@ -91,15 +140,17 @@ class PreviewPane(QWidget):
 
         self.star_btn = QPushButton(" Star")
         self.star_btn.setObjectName("iconButton")
-        self.star_btn.setIconSize(QSize(_ACTION_ICON_SIZE, _ACTION_ICON_SIZE))
+        self.star_btn.setFont(t.make_font("button"))
+        self.star_btn.setIconSize(QSize(t.ICON_SIZE_ACTION, t.ICON_SIZE_ACTION))
         self.star_btn.clicked.connect(self.star_clicked.emit)
         self.delete_btn = QPushButton(" Delete")
         self.delete_btn.setObjectName("iconButton")
+        self.delete_btn.setFont(t.make_font("button"))
         self.delete_btn.setIcon(icon_set(
-            "trash", _ACTION_ICON_SIZE, normal=t.ICON_SECONDARY,
+            "trash", t.ICON_SIZE_ACTION, normal=t.ICON_SECONDARY,
             active=t.ERROR, disabled=t.ICON_DISABLED,
         ))
-        self.delete_btn.setIconSize(QSize(_ACTION_ICON_SIZE, _ACTION_ICON_SIZE))
+        self.delete_btn.setIconSize(QSize(t.ICON_SIZE_ACTION, t.ICON_SIZE_ACTION))
         self.delete_btn.clicked.connect(self.delete_clicked.emit)
         for b in (self.star_btn, self.delete_btn):
             b.setEnabled(False)
@@ -107,7 +158,8 @@ class PreviewPane(QWidget):
         card_layout.addLayout(header_row)
 
         self._subject = QLabel("")
-        self._subject.setObjectName("heading")
+        self._subject.setFont(t.make_font("dialog_heading"))
+        self._subject.setStyleSheet(f"color: {t.TEXT_PRIMARY};")
         self._subject.setWordWrap(True)
         self._subject.setTextFormat(Qt.TextFormat.PlainText)
         card_layout.addWidget(self._subject)
@@ -115,39 +167,43 @@ class PreviewPane(QWidget):
         self._attachment_chip = QWidget()
         self._attachment_chip.setObjectName("attachmentChip")
         chip_layout = QHBoxLayout(self._attachment_chip)
-        chip_layout.setContentsMargins(10, 4, 12, 4)
-        chip_layout.setSpacing(6)
+        chip_layout.setContentsMargins(t.SPACE_SM + 2, t.SPACE_XS, t.SPACE_MD, t.SPACE_XS)
+        chip_layout.setSpacing(t.SPACE_XS + 2)
         chip_icon = QLabel()
-        chip_icon.setPixmap(simple_icon("attachment", 13, t.TEXT_SECONDARY).pixmap(13, 13))
+        chip_icon.setPixmap(simple_icon("attachment", t.ICON_SIZE_ROW, t.TEXT_SECONDARY)
+                            .pixmap(t.ICON_SIZE_ROW, t.ICON_SIZE_ROW))
         chip_layout.addWidget(chip_icon)
-        chip_layout.addWidget(QLabel("Has attachment"))
+        chip_text = QLabel("Has attachment")
+        chip_text.setFont(t.make_font("caption"))
+        chip_layout.addWidget(chip_text)
         self._attachment_chip.setVisible(False)
         chip_row = QHBoxLayout()
         chip_row.addWidget(self._attachment_chip)
         chip_row.addStretch(1)
         card_layout.addLayout(chip_row)
 
-        outer.addWidget(card)
-        t.apply_soft_shadow(card, blur=28, y_offset=8, alpha=90)
+        page_col.addWidget(card)
+        t.apply_elevation(card, "sm")
 
         self.body = HtmlMailView()
-        outer.addWidget(self.body, stretch=1)
+        page_col.addWidget(self.body, stretch=1)
+        self._stack.addWidget(message_page)
+
         self.set_starred(False)  # give the Star button its initial icon
+        self._stack.setCurrentWidget(self._empty)
 
     # ------------------------------------------------------------------ api
 
     def show_placeholder(self, title: str, body_text: str = "") -> None:
-        self._sender_name.setText(title)
-        self._sender_email_line.setText("")
-        self._sender_meta_line.setText("")
-        self._subject.setText("")
-        self._attachment_chip.setVisible(False)
-        self._avatar.set_identity("", "")
+        self._empty.set_text(title, body_text)
+        self._stack.setCurrentWidget(self._empty)
         self.set_actions_enabled(False)
-        if body_text:
-            self.body.set_email_text(body_text)
-        else:
-            self.body.set_email_text("")
+
+    def reset(self) -> None:
+        """Back to the default "nothing selected" empty state."""
+        self.show_placeholder(
+            "Select a message", "Choose an email from the list to read it here."
+        )
 
     def show_message(
         self, *, subject: str, sender_name: str, sender_email: str,
@@ -169,6 +225,7 @@ class PreviewPane(QWidget):
         self._attachment_chip.setVisible(has_attachments)
         self.set_actions_enabled(True)
         self.set_starred(is_starred)
+        self._stack.setCurrentIndex(1)
 
     def set_actions_enabled(self, enabled: bool) -> None:
         self.star_btn.setEnabled(enabled)
@@ -179,7 +236,7 @@ class PreviewPane(QWidget):
         icon_name = "star_filled" if starred else "star_outline"
         color = t.STARRED if starred else t.ICON_SECONDARY
         self.star_btn.setIcon(icon_set(
-            icon_name, _ACTION_ICON_SIZE, normal=color, active=t.STARRED,
+            icon_name, t.ICON_SIZE_ACTION, normal=color, active=t.STARRED,
             disabled=t.ICON_DISABLED,
         ))
 

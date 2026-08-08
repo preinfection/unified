@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -21,6 +22,8 @@ from PySide6.QtWidgets import (
 
 from app.auth import gmail_oauth
 from app.services.account_manager import AccountError, AccountManager
+from app.ui import theme as t
+from app.ui.svg_icon import simple_icon
 
 log = logging.getLogger(__name__)
 
@@ -129,23 +132,33 @@ class AccountDialog(QDialog):
         page = QWidget()
         v = QVBoxLayout(page)
         v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(t.SPACE_SM)
         text = QLabel(
             "Sign in with your Google account in the browser window that opens. "
             "No password is stored - only an OAuth token, kept in the Windows "
             "Credential Manager."
         )
+        text.setFont(t.make_font("body"))
         text.setWordWrap(True)
         v.addWidget(text)
         if not gmail_oauth.client_secrets_available():
+            warn_row = QHBoxLayout()
+            warn_row.setSpacing(t.SPACE_XS + 2)
+            warn_icon = QLabel()
+            warn_icon.setPixmap(simple_icon("warning", 15, t.WARNING).pixmap(15, 15))
+            warn_icon.setAlignment(Qt.AlignmentFlag.AlignTop)
             warn = QLabel(
                 "A Google OAuth client file has not been configured yet. "
                 "Open Settings and select your credentials.json first "
                 "(Google Cloud Console > APIs & Services > Credentials > "
                 "OAuth client ID, type 'Desktop app', with the Gmail API enabled)."
             )
+            warn.setFont(t.make_font("body"))
             warn.setWordWrap(True)
             warn.setObjectName("secondary")
-            v.addWidget(warn)
+            warn_row.addWidget(warn_icon)
+            warn_row.addWidget(warn, stretch=1)
+            v.addLayout(warn_row)
         return page
 
     def _build_imap_page(self) -> QWidget:
@@ -177,6 +190,7 @@ class AccountDialog(QDialog):
             "The password is stored only in the Windows Credential Manager, "
             "never in a file. For Gmail via IMAP, use an app password."
         )
+        note.setFont(t.make_font("body"))
         note.setWordWrap(True)
         note.setObjectName("secondary")
         form.addRow(note)

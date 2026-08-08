@@ -1,5 +1,6 @@
-"""The account drawer: folder navigation pills, then a scrollable list of
-connected accounts with live status, then Add account / Settings.
+"""The account drawer: app masthead, folder navigation pills, then a
+scrollable list of connected accounts with live status, then Add account /
+Settings.
 
 Rebuilding the account list (set_accounts) is only done when the account
 set actually changes (added/removed) - routine sync progress updates go
@@ -13,6 +14,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -21,9 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app import APP_NAME
 from app.ui import theme as t
 from app.ui.components.account_item import AccountItem
-from app.ui.svg_icon import icon_set
+from app.ui.svg_icon import simple_icon, icon_set
 
 VIEW_ITEMS = [
     ("inbox", "Unified Inbox", "inbox"),
@@ -31,12 +34,11 @@ VIEW_ITEMS = [
     ("sent", "Sent", "sent"),
     ("trash", "Trash", "trash"),
 ]
-_NAV_ICON_SIZE = 17
 
 
 def _nav_icon(name: str):
     return icon_set(
-        name, _NAV_ICON_SIZE,
+        name, t.ICON_SIZE_NAV,
         normal=t.ICON_SECONDARY, active=t.ICON_ACTIVE, selected=t.ICON_SELECTED,
     )
 
@@ -57,8 +59,11 @@ class SidebarWidget(QWidget):
         self._current_account_id: int | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 14, 10, 12)
-        root.setSpacing(4)
+        root.setContentsMargins(t.SPACE_SM, t.SPACE_MD, t.SPACE_SM, t.SPACE_MD)
+        root.setSpacing(t.SPACE_XXS)
+
+        root.addLayout(self._build_masthead())
+        root.addSpacing(t.SPACE_LG)
 
         self._nav_buttons: dict[str, QPushButton] = {}
         self._nav_group = QButtonGroup(self)
@@ -66,20 +71,22 @@ class SidebarWidget(QWidget):
         for view, label, icon_name in VIEW_ITEMS:
             btn = QPushButton(f"  {label}")
             btn.setObjectName("navPill")
+            btn.setFont(t.make_font("nav_label"))
             btn.setCheckable(True)
             btn.setFlat(True)
             btn.setIcon(_nav_icon(icon_name))
-            btn.setIconSize(QSize(_NAV_ICON_SIZE, _NAV_ICON_SIZE))
+            btn.setIconSize(QSize(t.ICON_SIZE_NAV, t.ICON_SIZE_NAV))
             btn.clicked.connect(lambda _=False, v=view: self._on_nav_clicked(v))
             self._nav_group.addButton(btn)
             self._nav_buttons[view] = btn
             root.addWidget(btn)
 
-        root.addSpacing(14)
+        root.addSpacing(t.SPACE_LG)
         section = QLabel("ACCOUNTS")
         section.setObjectName("sectionLabel")
+        section.setFont(t.make_font("section_label"))
         root.addWidget(section)
-        root.addSpacing(2)
+        root.addSpacing(t.SPACE_XXS)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -96,21 +103,54 @@ class SidebarWidget(QWidget):
 
         add_btn = QPushButton("  Add account...")
         add_btn.setObjectName("navPill")
+        add_btn.setFont(t.make_font("nav_label"))
         add_btn.setFlat(True)
         add_btn.setIcon(_nav_icon("add_circle"))
-        add_btn.setIconSize(QSize(_NAV_ICON_SIZE, _NAV_ICON_SIZE))
+        add_btn.setIconSize(QSize(t.ICON_SIZE_NAV, t.ICON_SIZE_NAV))
         add_btn.clicked.connect(self.add_account_requested.emit)
         root.addWidget(add_btn)
 
         settings_btn = QPushButton("  Settings")
         settings_btn.setObjectName("navPill")
+        settings_btn.setFont(t.make_font("nav_label"))
         settings_btn.setFlat(True)
         settings_btn.setIcon(_nav_icon("settings"))
-        settings_btn.setIconSize(QSize(_NAV_ICON_SIZE, _NAV_ICON_SIZE))
+        settings_btn.setIconSize(QSize(t.ICON_SIZE_NAV, t.ICON_SIZE_NAV))
         settings_btn.clicked.connect(self.settings_requested.emit)
         root.addWidget(settings_btn)
 
         self._nav_buttons["inbox"].setChecked(True)
+
+    # --------------------------------------------------------------- header
+
+    def _build_masthead(self) -> QHBoxLayout:
+        """App identity + a quiet "your mail is encrypted locally" cue -
+        the one place the product states its privacy premise, once, without
+        turning the whole sidebar into a badge wall."""
+        row = QHBoxLayout()
+        row.setContentsMargins(t.SPACE_XS, t.SPACE_XS, t.SPACE_XS, 0)
+        row.setSpacing(t.SPACE_SM)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(0)
+        name = QLabel(APP_NAME)
+        name.setFont(t.make_font("app_title"))
+        name.setStyleSheet(f"color: {t.TEXT_PRIMARY};")
+        caption = QLabel("Encrypted locally")
+        caption.setFont(t.make_font("caption"))
+        caption.setStyleSheet(f"color: {t.TEXT_TERTIARY};")
+        title_col.addWidget(name)
+        title_col.addWidget(caption)
+        row.addLayout(title_col)
+        row.addStretch(1)
+
+        lock = QLabel()
+        lock.setPixmap(simple_icon("lock", 15, t.SECURE).pixmap(15, 15))
+        lock.setToolTip(
+            "The local mailbox cache is encrypted at rest (AES-256-GCM)."
+        )
+        row.addWidget(lock, alignment=Qt.AlignmentFlag.AlignVCenter)
+        return row
 
     # ------------------------------------------------------------------ nav
 

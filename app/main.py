@@ -17,7 +17,7 @@ from app.database import Database
 from app.migration import migrate_legacy_install
 from app.security import crypto_store
 from app.ui.main_window import MainWindow
-from app.ui.style import STYLESHEET
+from app.ui.style import get_stylesheet
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setStyle("Fusion")  # consistent base look across Windows versions
-    app.setStyleSheet(STYLESHEET)
+    app.setStyleSheet(get_stylesheet())
     app.setQuitOnLastWindowClosed(True)
 
     settings = config.Settings()

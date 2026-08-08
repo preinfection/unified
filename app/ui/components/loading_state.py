@@ -9,6 +9,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 
+from app.ui import theme as t
+
 
 class LoadingState(QWidget):
     def __init__(self, parent=None):
@@ -17,21 +19,26 @@ class LoadingState(QWidget):
         outer.addStretch(2)
 
         inner = QVBoxLayout()
-        inner.setSpacing(10)
+        inner.setSpacing(t.SPACE_SM + 2)
         self._account_label = QLabel("")
-        self._account_label.setObjectName("heading")
+        self._account_label.setFont(t.make_font("dialog_heading"))
+        self._account_label.setStyleSheet(f"color: {t.TEXT_PRIMARY};")
         self._account_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_label = QLabel("")
+        self._status_label.setFont(t.make_font("body"))
+        self._status_label.setStyleSheet(f"color: {t.TEXT_SECONDARY};")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._bar = QProgressBar()
         self._bar.setFixedWidth(360)
         self._bar.setTextVisible(False)
         self._detail_label = QLabel("")
-        self._detail_label.setObjectName("secondary")
+        self._detail_label.setFont(t.make_font("caption"))
+        self._detail_label.setStyleSheet(f"color: {t.TEXT_TERTIARY};")
         self._detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         inner.addWidget(self._account_label)
         inner.addWidget(self._status_label)
+        inner.addSpacing(t.SPACE_XS)
         inner.addWidget(self._bar, alignment=Qt.AlignmentFlag.AlignHCenter)
         inner.addWidget(self._detail_label)
         outer.addLayout(inner)

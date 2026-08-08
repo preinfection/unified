@@ -52,6 +52,7 @@ from app.services.sync_service import (
 )
 from app.ui.account_dialog import AccountDialog
 from app.ui.components.email_list import EmailListView, format_time
+from app.ui.components.empty_state import EmptyState
 from app.ui.components.loading_state import LoadingState
 from app.ui.components.preview_pane import PreviewPane
 from app.ui.components.sidebar import SidebarWidget
@@ -217,10 +218,12 @@ class MainWindow(QMainWindow):
         lp.addWidget(self.load_more_btn)
 
         self.loading_state = LoadingState()
+        self.empty_state = EmptyState()
 
         self.center_stack = QStackedWidget()
         self.center_stack.addWidget(list_page)
         self.center_stack.addWidget(self.loading_state)
+        self.center_stack.addWidget(self.empty_state)
         splitter.addWidget(self.center_stack)
 
         self.preview = PreviewPane()
@@ -418,10 +421,10 @@ class MainWindow(QMainWindow):
         self._refresh_center_page(shown)
 
     def _refresh_center_page(self, email_count: int) -> None:
-        """Panel instead of list only while a pending account has no rows yet.
-
-        As soon as metadata lands, the live list is shown so the app stays
-        usable during sync.
+        """Three alternatives to the live list, tried in order: a pending
+        account's sync progress, a friendly empty state (no accounts, an
+        empty folder, no search results), or - once metadata lands - the
+        list itself, so the app stays usable during sync.
         """
         accounts = self.db.get_accounts()
         account = None
@@ -441,13 +444,52 @@ class MainWindow(QMainWindow):
                 (a for a in accounts if self.sync.is_account_pending(a["id"])),
                 None,
             )
-        if account is None:
-            self._panel_account_id = None
-            self.center_stack.setCurrentIndex(0)
+        if account is not None:
+            self._panel_account_id = account["id"]
+            self._update_loading_state(account)
+            self.center_stack.setCurrentIndex(1)
             return
-        self._panel_account_id = account["id"]
-        self._update_loading_state(account)
-        self.center_stack.setCurrentIndex(1)
+        self._panel_account_id = None
+
+        if email_count == 0:
+            self._show_empty_state(has_accounts=bool(accounts))
+            self.center_stack.setCurrentIndex(2)
+            return
+        self.center_stack.setCurrentIndex(0)
+
+    def _show_empty_state(self, *, has_accounts: bool) -> None:
+        search = self.toolbar.search_text()
+        if not has_accounts:
+            self.empty_state.set_state(
+                icon="add_circle", title="No accounts yet",
+                detail="Add a Gmail or IMAP account to start receiving mail.",
+                action_text="Add account", on_action=self.open_add_account,
+            )
+        elif search:
+            self.empty_state.set_state(
+                icon="search", title="No results",
+                detail=f'No messages match "{search}".',
+            )
+        elif self.current_view == "starred":
+            self.empty_state.set_state(
+                icon="starred_nav", title="No starred messages",
+                detail="Star an email to keep it handy here.",
+            )
+        elif self.current_view == "sent":
+            self.empty_state.set_state(
+                icon="sent", title="No sent messages yet",
+                detail="Messages you send will appear here.",
+            )
+        elif self.current_view == "trash":
+            self.empty_state.set_state(
+                icon="trash", title="Trash is empty",
+                detail="Deleted messages will appear here.",
+            )
+        else:
+            self.empty_state.set_state(
+                icon="inbox", title="Inbox is empty",
+                detail="New mail will appear here automatically.",
+            )
 
     def _update_loading_state(self, account: dict) -> None:
         state = self.sync.status(account["id"])
@@ -606,7 +648,7 @@ class MainWindow(QMainWindow):
         self.db.move_to_trash(self.current_email_id)
         self._remote_action(msg, "trash")
         self.current_email_id = None
-        self.preview.show_placeholder("Select an email", "")
+        self.preview.reset()
         self.reload_email_list()
         self.reload_sidebar()
 

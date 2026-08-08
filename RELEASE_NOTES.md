@@ -1,5 +1,76 @@
 # Unified
 
+## v1.2.0
+
+Complete privacy-focused visual redesign, built on top of v1.1.0's icon
+system rather than replacing it. Design research: the app's existing
+Iconly asset pack, and (for spacing/typography/component-organization
+patterns only - no code, branding, or assets copied) Proton Mail's public
+web client source. No backend, sync, database, encryption, or installer
+*logic* changed - presentation layer only.
+
+### What changed
+
+- **Full design token system** (`theme.py`): a 4px spacing scale, a
+  derived radius scale, named typography presets (size/weight/letter-
+  spacing per context - sender, subject, timestamps, dialog headings,
+  field labels, etc.) built on a Segoe UI Variable font stack, icon-size
+  and control-height tokens, animation durations, and three shadow
+  presets - replacing the scattered ad-hoc pixel values and one-off
+  QFont calls from v1.1.0.
+- **Date-grouped message list**: rows are now sectioned into Today /
+  Yesterday / Earlier, painted as lightweight synthetic rows in the same
+  virtualized model (not a second widget or a tree) - zero per-row
+  widget cost, same delegate-based rendering as before.
+- **Reading pane rebuilt as two real states**: a centered empty state
+  when nothing is selected (previously a half-empty card with blank
+  fields) and the message card when something is - subject now reads as
+  the headline, sender name as the secondary line, matching how mail
+  apps actually establish hierarchy.
+- **Compose window rebuilt**: label-left borderless field rows instead
+  of a QFormLayout of boxed inputs, a real header (title, discard, Send)
+  instead of a generic OK/Cancel button box.
+- **Settings rebuilt**: grouped, dividered panels instead of stacked
+  QGroupBox frames, with a custom animated sliding toggle switch
+  (`components/toggle.py`) replacing the plain checkbox for on/off
+  settings.
+- **New empty/error states throughout**: no accounts yet (with an Add
+  account action), empty inbox/starred/sent/trash per view, and "no
+  results for {query}" - previously these all silently showed a blank
+  list.
+- **Sidebar masthead**: the app name plus a quiet "Encrypted locally"
+  line and lock glyph - the one place the product states its privacy
+  premise, once, rather than repeating it as a badge on every screen.
+- Six new icons (`lock`, `shield`, `more_horizontal`, `chevron_down`,
+  `check`, `warning`), hand-authored to match the existing set's stroke
+  weight and sizing.
+
+### Fixed during the redesign (found via testing, not requested changes)
+
+- `QComboBox`'s native down-arrow rendered as a plain gray rectangle
+  instead of a triangle once any part of the combo box was QSS-styled -
+  a known Qt/Fusion limitation where styling any subcontrol of a complex
+  control drops the native arrow primitive entirely rather than falling
+  back to it. Fixed by rendering the arrow as a real tinted PNG (the same
+  `svg_icon` pipeline used everywhere else) instead of QSS's border-
+  triangle trick, which Qt does not reliably honor for this subcontrol.
+  This required moving `style.py`'s stylesheet from a module-level
+  constant to a function called after `QApplication` exists, since
+  building that icon needs a live Qt application.
+
+### Untouched in this release
+
+Gmail API integration, OAuth authentication, account storage, the
+encryption system, DPAPI handling, the SQLite schema, sync workers,
+background threads, email fetching, MIME parsing, the search backend,
+notifications, and the build/installer *scripts* (only the version
+number changed in `installer/Unified.iss`, `AppId` deliberately kept
+identical so this upgrades in place over v1.1.0) - verified by diff, not
+just by intent: the full pre-existing test suite (54 tests) passes
+unchanged.
+
+---
+
 ## v1.1.0
 
 Major visual/UX redesign on top of the v1.0.1 dark theme. No backend,

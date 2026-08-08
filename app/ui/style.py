@@ -9,12 +9,47 @@ for looks. Colors are pulled from theme.py so this file and the
 custom-painted delegates never disagree about what a color means.
 """
 
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+
 from app.ui import theme as t
 
-STYLESHEET = f"""
+_arrow_cache_path: Path | None = None
+
+
+def _combo_arrow_url() -> str:
+    """A real tinted chevron PNG for QComboBox's down-arrow, referenced by
+    file path rather than drawn via QSS's border-triangle trick - Qt's
+    style engine only partially honors a styled QComboBox's native arrow
+    primitive (Fusion silently drops it once any subcontrol is QSS'd), so
+    an explicit image is the only reliable way to get one back.
+
+    Deferred until first call (not import time): rendering the pixmap
+    needs a live QApplication, which does not exist yet when this module
+    is first imported in app/main.py.
+    """
+    global _arrow_cache_path
+    if _arrow_cache_path is not None:
+        return _arrow_cache_path.as_posix()
+
+    from app.ui.svg_icon import tinted_pixmap
+
+    path = Path(tempfile.gettempdir()) / "unified_combo_arrow.png"
+    tinted_pixmap("chevron_down", 16, t.TEXT_SECONDARY).save(str(path), "PNG")
+    _arrow_cache_path = path
+    return path.as_posix()
+
+
+def get_stylesheet() -> str:
+    """Built lazily (call after QApplication exists), not as a module
+    constant - see _combo_arrow_url."""
+    arrow_url = _combo_arrow_url()
+    return f"""
 * {{
-    font-family: "Segoe UI", sans-serif;
-    font-size: 13px;
+    font-family: {t.FONT_FAMILIES_CSS};
+    font-size: {t.SIZE_MD}px;
     color: {t.TEXT_PRIMARY};
 }}
 
@@ -44,7 +79,7 @@ QStackedWidget {{ background: {t.BG_APP}; }}
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QComboBox {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER};
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
     padding: 5px 8px;
     selection-background-color: {t.ACCENT};
     selection-color: {t.TEXT_ON_ACCENT};
@@ -58,16 +93,15 @@ QLineEdit::placeholder {{ color: {t.TEXT_TERTIARY}; }}
 QLineEdit#searchField {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER};
-    border-radius: 15px;
+    border-radius: {t.RADIUS_PILL}px;
     padding: 5px 10px 5px 8px;
 }}
 QLineEdit#searchField:focus {{ border: 1px solid {t.ACCENT}; }}
-QComboBox::drop-down {{ border: none; width: 20px; }}
+QComboBox::drop-down {{ border: none; width: 22px; background: transparent; }}
 QComboBox::down-arrow {{
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid {t.TEXT_SECONDARY};
+    image: url({arrow_url});
+    width: 11px;
+    height: 11px;
     margin-right: 6px;
 }}
 QComboBox QAbstractItemView {{
@@ -82,7 +116,7 @@ QComboBox QAbstractItemView {{
 QPushButton {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER_LIGHT};
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
     padding: 5px 14px;
     min-height: 20px;
     color: {t.TEXT_PRIMARY};
@@ -108,7 +142,7 @@ QPushButton:checkable:checked {{
 QPushButton#iconButton {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
     padding: 6px;
     font-weight: 500;
 }}
@@ -123,7 +157,7 @@ QPushButton#iconButton:checkable:checked {{
 QPushButton#navPill {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: {t.RADIUS_MD}px;
     padding: 7px 12px;
     text-align: left;
     color: {t.TEXT_SECONDARY};
@@ -140,18 +174,21 @@ QPushButton#composeButton {{
     background: {t.ACCENT};
     color: {t.TEXT_ON_ACCENT};
     border: 1px solid {t.ACCENT};
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
     font-weight: 600;
     padding: 6px 16px;
 }}
 QPushButton#composeButton:hover {{ background: {t.ACCENT_HOVER}; }}
 QPushButton#composeButton:pressed {{ background: {t.ACCENT_PRESSED}; }}
+QPushButton#composeButton:disabled {{
+    background: {t.BG_SELECTED}; color: {t.TEXT_TERTIARY}; border-color: {t.BORDER};
+}}
 
 /* ---- Lists / trees (Settings account list, combo popups) ---- */
 QTreeWidget, QListWidget, QTreeView, QTableView, QListView {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER};
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
     outline: none;
     alternate-background-color: {t.BG_PANEL};
     color: {t.TEXT_PRIMARY};
@@ -203,19 +240,19 @@ QToolBar::separator {{ background: {t.BORDER}; width: 1px; margin: 4px 6px; }}
 
 /* ---- Menus ---- */
 QMenu {{
-    background: {t.BG_PANEL};
+    background: {t.BG_OVERLAY};
     border: 1px solid {t.BORDER_LIGHT};
-    border-radius: 8px;
+    border-radius: {t.RADIUS_MD}px;
     padding: 4px;
 }}
-QMenu::item {{ padding: 6px 24px 6px 12px; border-radius: 5px; color: {t.TEXT_PRIMARY}; }}
+QMenu::item {{ padding: 6px 24px 6px 12px; border-radius: {t.RADIUS_XS}px; color: {t.TEXT_PRIMARY}; }}
 QMenu::item:selected {{ background: {t.BG_SELECTED}; }}
 QMenu::separator {{ height: 1px; background: {t.BORDER}; margin: 4px 8px; }}
 
 /* ---- Progress ---- */
 QProgressBar {{
     border: 1px solid {t.BORDER};
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
     background: {t.BG_PANEL};
     text-align: center;
     min-height: 6px;
@@ -226,7 +263,7 @@ QProgressBar::chunk {{ background: {t.ACCENT}; border-radius: 5px; }}
 /* ---- Console ---- */
 QPlainTextEdit#console {{
     border: 1px solid {t.BORDER};
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
     background: {t.BG_PANEL};
     color: {t.TEXT_SECONDARY};
     font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
@@ -254,11 +291,11 @@ QLabel#sectionLabel {{
 /* An explicit color (not "transparent") avoids a QAbstractScrollArea
    viewport-compositing quirk where a transparent background can paint
    as opaque black instead of showing the parent's color through. */
-QTextBrowser {{ border: none; background: {t.BG_PANEL}; color: {t.TEXT_PRIMARY}; }}
+QTextBrowser {{ border: none; background: {t.BG_PANEL}; color: {t.TEXT_PRIMARY}; padding: 14px 16px; }}
 QGroupBox {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER};
-    border-radius: 8px;
+    border-radius: {t.RADIUS_MD}px;
     margin-top: 12px;
     padding-top: 10px;
     font-weight: 600;
@@ -272,7 +309,7 @@ QGroupBox::title {{
 QCheckBox {{ background: transparent; }}
 QCheckBox::indicator {{
     width: 15px; height: 15px;
-    border: 1px solid {t.BORDER_LIGHT}; border-radius: 4px;
+    border: 1px solid {t.BORDER_LIGHT}; border-radius: {t.RADIUS_XS}px;
     background: {t.BG_PANEL};
 }}
 QCheckBox::indicator:checked {{ background: {t.ACCENT}; border-color: {t.ACCENT}; }}
@@ -280,10 +317,10 @@ QCheckBox::indicator:hover {{ border-color: {t.ACCENT}; }}
 
 /* ---- Tooltips ---- */
 QToolTip {{
-    background: {t.BG_SELECTED};
+    background: {t.BG_OVERLAY};
     color: {t.TEXT_PRIMARY};
     border: 1px solid {t.BORDER_LIGHT};
-    border-radius: 4px;
+    border-radius: {t.RADIUS_XS}px;
     padding: 4px 8px;
 }}
 
@@ -309,12 +346,12 @@ QLabel#unreadBadge {{
 QWidget#previewCard {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER};
-    border-radius: 10px;
+    border-radius: {t.RADIUS_LG}px;
 }}
 QWidget#attachmentChip {{
     background: {t.BG_SELECTED};
     border: 1px solid {t.BORDER_LIGHT};
-    border-radius: 6px;
+    border-radius: {t.RADIUS_SM}px;
 }}
 QWidget#attachmentChip QLabel {{
     color: {t.TEXT_SECONDARY};
@@ -327,5 +364,43 @@ QListView#emailList {{
     border: none;
     border-right: 1px solid {t.BORDER};
     padding: 4px;
+}}
+
+/* ---- Compose ---- */
+/* Label-left field rows with a bottom rule instead of a full box border -
+   the "borderless field, divider between rows" pattern real mail
+   composers use instead of stacking boxed QLineEdits. */
+QLineEdit#composeField, QComboBox#composeField {{
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: {t.SPACE_XS}px 0;
+}}
+QWidget#composeFieldRow {{
+    border-bottom: 1px solid {t.BORDER};
+}}
+QWidget#composeFields {{
+    background: {t.BG_PANEL};
+    border: 1px solid {t.BORDER};
+    border-radius: {t.RADIUS_LG}px;
+}}
+QPlainTextEdit#composeBody {{
+    background: transparent;
+    border: none;
+    padding: 0 2px;
+}}
+
+/* ---- Settings ---- */
+QWidget#settingsPanel {{
+    background: {t.BG_PANEL};
+    border: 1px solid {t.BORDER};
+    border-radius: {t.RADIUS_LG}px;
+}}
+QWidget#settingsRow {{
+    background: transparent;
+}}
+QSpinBox#settingsControl {{
+    background: {t.BG_OVERLAY};
+    min-width: 90px;
 }}
 """

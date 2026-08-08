@@ -16,6 +16,8 @@ from PySide6.QtCore import QByteArray, QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QTextBrowser
 
+from app.ui import theme as t
+
 log = logging.getLogger(__name__)
 
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -32,6 +34,9 @@ class HtmlMailView(QTextBrowser):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setOpenExternalLinks(True)
+        # Only takes effect for plain-text bodies - real HTML mail carries
+        # its own fonts, which this deliberately never overrides.
+        self.setFont(t.make_font("body"))
         self._html = ""
         self._images: dict[str, QByteArray] = {}
         self._pending: set[str] = set()
