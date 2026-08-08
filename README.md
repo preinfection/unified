@@ -59,8 +59,9 @@ black-and-white, and fast even at 20,000+ cached messages.
 - **Organization** - star/unstar, mark read/unread, move to trash; actions are
   pushed back to the mail server in the background
 - **Compose** - send plain-text mail from any connected account
-- **Security** - no passwords or tokens are ever written to disk; everything
-  secret lives in the Windows Credential Manager (OS keyring)
+- **Security** - no passwords or tokens are ever written to disk (they live in
+  the Windows Credential Manager), and the local mailbox cache itself is
+  encrypted at rest - see [Security notes](#security-notes)
 
 ## Requirements
 
@@ -80,6 +81,13 @@ python -m venv .venv
 > Note: run `python run.py` or `python -m app.main` from the project root.
 > Do not run `python app\main.py` directly - it would put `app/` on `sys.path`
 > and shadow the standard library `email` module.
+
+There is nothing to set up by hand before first launch: the app creates its
+own `%APPDATA%\Unified` folder, empty database, log directory, and default
+settings automatically the first time it runs. A fresh clone with no prior
+install opens straight to an empty, working inbox - the only actual setup
+step is the one-time Google OAuth client below, and that's only needed if
+you want to add a Gmail account.
 
 ## Connecting accounts
 
@@ -156,8 +164,34 @@ Unified/
 - Gmail access uses the official Gmail API with the `gmail.modify` and
   `gmail.send` scopes.
 - IMAP connections use SSL; SMTP uses SSL or STARTTLS.
-- The local SQLite cache (`%APPDATA%\Unified\mailbox.db`) contains message
-  bodies - it stays on your machine and is excluded from git.
+- The local SQLite cache is **encrypted at rest** (AES-256-GCM). The key is
+  generated once and wrapped with Windows DPAPI - the same mechanism
+  Chrome/Edge use for saved passwords - so it only unwraps under your
+  specific Windows user account on this machine. The database is decrypted
+  to a working copy while the app runs and re-encrypted on every clean exit.
+  This protects a stolen disk, a backup that leaks, or another account on a
+  shared machine; it does not protect against malware already running as
+  you while the app is open, which no local password-free encryption can.
+  Full detail in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+- Logging (the in-app Console and `logs\app.log`) never writes OAuth
+  tokens, passwords, client secrets, message subjects/bodies, or attachment
+  names. Account activity is logged by a local numeric ID only (e.g.
+  "Account 3: sync started"), not by email address.
+- Nothing under `%APPDATA%\Unified` (database, settings, encryption key) is
+  ever written inside the project folder itself, and none of it is tracked
+  by git - see `.gitignore`.
+
+## What's not in this repo
+
+This repo contains only source code, tests, and two illustrative
+screenshots built from fictional demo accounts (`work@gmail.com`,
+`Sarah Chen`, etc. - not real data). `.gitignore` excludes every category of
+local/generated/private content: databases and encryption keys, Google
+credentials and OAuth tokens, logs, Python caches (`__pycache__/`,
+`.pytest_cache/`), build output (`build/`, `dist/`, `release/`, `*.spec`),
+environment/local-config overrides, IDE files, and temp files. None of it
+is ever written inside the project folder to begin with - see
+[Security notes](#security-notes).
 
 ## Repo image
 

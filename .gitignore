@@ -1,7 +1,11 @@
-# Python
+# Python generated
 __pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
 .venv/
 venv/
 
@@ -11,20 +15,62 @@ dist/
 release/
 *.spec
 
-# Test / tooling caches
-.pytest_cache/
-.coverage
-
-# Local data - never commit credentials or tokens
-credentials.json
-client_secret*.json
-token*.json
+# Local user data - the app stores everything under %APPDATA%\Unified,
+# never inside the project folder, but these are excluded defensively in
+# case anything is ever run/tested with a project-relative data path.
 *.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
 *.db.enc
 *.db.enc.locked-*
-key.bin
-*.log
+mailbox/
+mail/
+cache/
+cached/
+data/
+userdata/
+user_data/
+profiles/
 
-# IDE
+# Google / auth - never commit credentials, tokens, or keys
+credentials.json
+google_credentials.json
+token.json
+token*.json
+tokens/
+oauth/
+oauth2/
+client_secret*.json
+key.bin
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+debug/
+crash/
+dumps/
+
+# Environment / local config overrides
+.env
+.env.*
+config.local.*
+settings.local.*
+
+# IDE / machine files
 .idea/
 .vscode/
+*.user
+*.suo
+desktop.ini
+
+# Temp files
+*.tmp
+*.bak
+*.old
+*_backup*
+temp/
+tmp/
