@@ -1,6 +1,7 @@
 """Tests for RFC 822 parsing into the app's message shape."""
 
 from email.mime.base import MIMEBase
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -8,6 +9,7 @@ from app.email.message_parser import (
     decode_header_value,
     make_snippet,
     parse_rfc822,
+    resolve_cid_images,
 )
 
 
@@ -77,3 +79,59 @@ def test_unparseable_date_defaults_to_zero():
     msg["Date"] = "not a date"
     parsed = parse_rfc822(msg.as_bytes(), 1, "inbox", "9")
     assert parsed["date_ts"] == 0
+
+
+# --------------------------------------------------------- inline CID images
+
+def test_resolve_cid_images_rewrites_src():
+    html = '<img src="cid:logo123">'
+    out = resolve_cid_images(html, {"logo123": (b"\x89PNG...", "image/png")})
+    assert "cid:" not in out
+    assert out.startswith('<img src="data:image/png;base64,')
+
+
+def test_resolve_cid_images_leaves_unknown_cid_untouched():
+    html = '<img src="cid:missing">'
+    out = resolve_cid_images(html, {"other": (b"data", "image/png")})
+    assert out == html
+
+
+def test_resolve_cid_images_handles_background_attr_and_multiple_refs():
+    html = (
+        '<td background="cid:bg"><img src="cid:a"><img src="cid:b"></td>'
+    )
+    cid_map = {
+        "bg": (b"1", "image/png"),
+        "a": (b"2", "image/jpeg"),
+        "b": (b"3", "image/gif"),
+    }
+    out = resolve_cid_images(html, cid_map)
+    assert "cid:" not in out
+    assert "data:image/jpeg;base64," in out
+    assert "data:image/gif;base64," in out
+
+
+def test_resolve_cid_images_noop_without_map():
+    html = '<img src="cid:x">'
+    assert resolve_cid_images(html, {}) == html
+
+
+def test_extract_bodies_resolves_inline_cid_image_end_to_end():
+    outer = MIMEMultipart("related")
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText("plain version", "plain"))
+    alt.attach(MIMEText(
+        '<html><body><img src="cid:logo@abc"></body></html>', "html"
+    ))
+    outer.attach(alt)
+    image = MIMEImage(b"\x89PNG\r\n\x1a\n" + b"0" * 16, "png")
+    image.add_header("Content-ID", "<logo@abc>")
+    image.add_header("Content-Disposition", "inline", filename="logo.png")
+    outer.attach(image)
+    outer["From"] = "sender@example.com"
+    outer["To"] = "me@example.com"
+    outer["Subject"] = "Inline image"
+
+    parsed = parse_rfc822(outer.as_bytes(), account_id=1, folder="inbox", uid="1")
+    assert "cid:logo@abc" not in parsed["body_html"]
+    assert "data:image/png;base64," in parsed["body_html"]

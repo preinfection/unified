@@ -30,7 +30,7 @@ Built with Python, PySide6, and SQLite, Unified focuses on a modern desktop expe
 1. Download the latest release:
 
 ```
-Unified-Setup-v1.2.0.exe
+Unified-Setup-v1.2.1.exe
 ```
 
 2. Run the installer.
@@ -92,11 +92,29 @@ The application remains usable while synchronization is running.
 
 ## Security
 
-* Gmail authentication uses OAuth2.
-* IMAP credentials are stored securely through Windows Credential Manager.
-* Local mailbox data is encrypted using AES-256-GCM.
-* Encryption keys are protected using Windows DPAPI.
+* Gmail authentication uses OAuth2; no Google password ever reaches the app.
+* IMAP/SMTP credentials and the Gmail OAuth token are stored only in the
+  Windows Credential Manager - never written to disk in plaintext.
+* All network connections are encrypted in transit: IMAP is SSL-only,
+  SMTP uses implicit SSL or STARTTLS before login, and the Gmail API is
+  HTTPS-only (enforced by Google's own client library).
+* The local mailbox cache is encrypted at rest with AES-256-GCM; the key
+  is generated once and wrapped with Windows DPAPI, so it only unwraps
+  under this Windows user account on this machine. See
+  [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full threat model -
+  stated plainly, including what this does *not* protect against.
 * Logs do not contain passwords, tokens, or private message content.
+
+**What this is not:** Unified is not end-to-end encrypted mail. Gmail
+and IMAP are standard protocols - your mail provider can read message
+content, exactly as with any other Gmail/IMAP client, and nothing here
+changes that. "Encrypted locally" (in the app's sidebar, and above)
+refers specifically to the local cache and stored credentials on your
+machine, not the message content itself in transit or at your
+provider. Real end-to-end encryption (PGP/S-MIME) would require key
+management and a compatible setup on the recipient's end for every
+correspondent - it is not implemented, and this is not a claim made
+anywhere in the app.
 
 ## Technical details
 

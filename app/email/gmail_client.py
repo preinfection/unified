@@ -11,7 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from app.auth import gmail_oauth
-from app.email.message_parser import make_snippet
+from app.email.message_parser import make_snippet, resolve_cid_images
 
 log = logging.getLogger(__name__)
 
@@ -279,16 +279,23 @@ class GmailClient:
         }
 
     def _walk_payload(self, payload: dict, msg_id: str) -> tuple[str, str, bool]:
-        """Recursively extract text/html bodies and attachment presence."""
+        """Recursively extract text/html bodies and attachment presence.
+
+        Inline images referenced by the HTML as cid:<Content-ID> are
+        resolved into data: URIs before returning - see
+        message_parser.resolve_cid_images. Gmail's API exposes the raw
+        MIME Content-ID header as part["headers"], same as any other
+        header, so this reads it the same way the "from"/"subject"
+        headers are read elsewhere in this client.
+        """
         body_text, body_html = "", ""
         has_attachments = False
+        cid_map: dict[str, tuple[bytes, str]] = {}
 
-        def decode(body: dict) -> str:
+        def decode(body: dict) -> bytes:
             data = body.get("data", "")
             if data:
-                return base64.urlsafe_b64decode(data.encode()).decode(
-                    "utf-8", errors="replace"
-                )
+                return base64.urlsafe_b64decode(data.encode())
             # Large bodies are sometimes delivered as attachments instead of
             # inline data - fetch them, or the preview would be blank.
             att_id = body.get("attachmentId")
@@ -299,27 +306,37 @@ class GmailClient:
                         .get(userId="me", messageId=msg_id, id=att_id)
                         .execute()
                     )
-                    return base64.urlsafe_b64decode(
-                        att.get("data", "").encode()
-                    ).decode("utf-8", errors="replace")
+                    return base64.urlsafe_b64decode(att.get("data", "").encode())
                 except HttpError as e:
                     log.warning("Attachment-hosted body fetch failed: %s", e)
-            return ""
+            return b""
+
+        def decode_text(body: dict) -> str:
+            return decode(body).decode("utf-8", errors="replace")
 
         def walk(part: dict) -> None:
             nonlocal body_text, body_html, has_attachments
             mime = part.get("mimeType", "")
+            headers = {
+                h["name"].lower(): h["value"] for h in part.get("headers", []) or []
+            }
+            content_id = headers.get("content-id", "").strip().strip("<>")
+            if content_id and mime.startswith("image/"):
+                data = decode(part.get("body", {}))
+                if data:
+                    cid_map[content_id] = (data, mime)
             if part.get("filename"):
                 has_attachments = True
                 return
             if mime == "text/plain" and not body_text:
-                body_text = decode(part.get("body", {}))
+                body_text = decode_text(part.get("body", {}))
             elif mime == "text/html" and not body_html:
-                body_html = decode(part.get("body", {}))
+                body_html = decode_text(part.get("body", {}))
             for sub in part.get("parts", []) or []:
                 walk(sub)
 
         walk(payload)
+        body_html = resolve_cid_images(body_html, cid_map)
         return body_text, body_html, has_attachments
 
     # --------------------------------------------------------------------- flags

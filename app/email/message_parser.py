@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import email
 import email.header
 import email.utils
@@ -39,13 +40,52 @@ def _payload_text(part: Message) -> str:
         return payload.decode("utf-8", errors="replace")
 
 
+_CID_SRC = re.compile(
+    r'((?:src|background)\s*=\s*["\'])cid:([^"\']+)(["\'])', re.IGNORECASE
+)
+
+
+def resolve_cid_images(html: str, cid_map: dict[str, tuple[bytes, str]]) -> str:
+    """Replace src="cid:xxx" references with inline data: URIs.
+
+    QTextBrowser has no notion of a MIME message's Content-ID parts (that's
+    an email concept, not an HTML one), so cid: URLs are otherwise dead
+    references - the image silently never appears. cid_map is keyed by the
+    Content-ID with angle brackets stripped, matching the img tag's raw
+    "cid:<the same id>" reference.
+    """
+    if not html or not cid_map:
+        return html
+
+    def _sub(m: re.Match) -> str:
+        content_id = m.group(2).strip()
+        found = cid_map.get(content_id)
+        if not found:
+            return m.group(0)
+        data, mime = found
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"{m.group(1)}data:{mime};base64,{b64}{m.group(3)}"
+
+    return _CID_SRC.sub(_sub, html)
+
+
 def extract_bodies(msg: Message) -> tuple[str, str, bool]:
-    """Return (body_text, body_html, has_attachments) from a parsed message."""
+    """Return (body_text, body_html, has_attachments) from a parsed message.
+
+    Inline images referenced by the HTML as cid:<Content-ID> are resolved
+    into data: URIs before body_html is returned - see resolve_cid_images.
+    """
     body_text, body_html = "", ""
     has_attachments = False
+    cid_map: dict[str, tuple[bytes, str]] = {}
     parts = msg.walk() if msg.is_multipart() else [msg]
     for part in parts:
         ctype = part.get_content_type()
+        content_id = (part.get("Content-ID") or "").strip().strip("<>")
+        if content_id and ctype.startswith("image/"):
+            payload = part.get_payload(decode=True)
+            if payload:
+                cid_map[content_id] = (payload, ctype)
         disposition = str(part.get("Content-Disposition") or "")
         if part.get_filename() or "attachment" in disposition.lower():
             has_attachments = True
@@ -54,6 +94,7 @@ def extract_bodies(msg: Message) -> tuple[str, str, bool]:
             body_text = _payload_text(part)
         elif ctype == "text/html" and not body_html:
             body_html = _payload_text(part)
+    body_html = resolve_cid_images(body_html, cid_map)
     return body_text, body_html, has_attachments
 
 

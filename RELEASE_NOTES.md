@@ -1,5 +1,89 @@
 # Unified
 
+## v1.2.1
+
+Fixes a serious HTML email rendering bug reported against v1.2.0's
+reading pane, redesigns the app icon, and audits (without changing) the
+security architecture and memory behavior. No UI redesign work - v1.2.0's
+visual system is untouched.
+
+### Fixed: HTML email rendering
+
+Real newsletters/marketing emails were rendering with images sliced into
+strips, large gaps, and displaced/clipped content. Root-caused (not
+guessed at) by rendering 13 realistic HTML fixtures plus a targeted
+diagnostic matrix through the actual reading pane and comparing output
+pixel-by-pixel:
+
+- QTextDocument (the reading pane's rendering engine) silently ignores
+  CSS `max-width`/`height:auto` - the single most common responsive-
+  image pattern in real email templates. An image with no HTML width/
+  height attribute renders at its raw native pixel size regardless of
+  CSS, overflowing the viewport.
+- When an `<img>` tag's width/height *attributes* don't match the
+  image's real aspect ratio (common: retina-2x source assets, template
+  edits that changed the image but not the markup), Qt's scaling does
+  not cleanly stretch or letterbox - it drops rows of the source image
+  and redistributes what's left. Confirmed with a labeled test image:
+  an entire labeled band vanished under a mismatched width/height.
+- `cid:` inline images (logos, signatures) were never resolved at all -
+  silently dead references, invisible with no error.
+
+Fix: every `<img>` tag is normalized to a width-only sizing hint before
+reaching QTextDocument (confirmed by direct testing to be the one form
+Qt scales correctly), with a pixel-level fallback cap for images with no
+sizing hint at all. `cid:` images are now resolved to inline data: URIs
+at MIME-parse time, for both the Gmail API and IMAP paths. `data:` URI
+images are now decoded manually, since QTextDocument does not resolve
+them on its own either (confirmed by direct testing, not assumed).
+16 new regression tests cover the sizing normalizer and CID resolution.
+
+### Audited: privacy/encryption architecture
+
+Reviewed the full security model against a set of hard constraints (no
+hashing-as-encryption, no custom cryptography, no false end-to-end-
+encryption claims). Found nothing to fix - the existing AES-256-GCM at-
+rest encryption, DPAPI key wrapping, OS-keyring credential storage, and
+TLS-everywhere network layer were already sound. Added an explicit
+"what this is not" note to the README: Unified does not provide end-to-
+end encryption for Gmail/IMAP messages (no product can, without a
+compatible PGP/S-MIME setup on every correspondent's end) - "encrypted
+locally" always meant the local cache and credentials, never message
+content in transit or at the provider, and that was never claimed
+otherwise, but it's now stated in so many words rather than left implicit.
+
+### Audited: memory usage
+
+Profiled RSS at cold startup, empty inbox, 1k/10k cached messages,
+opening a normal and an image-heavy HTML email, rapid message switching,
+search, and 20s idle, using win32process (no new dependency). Peak
+measured usage across all of that was ~188MB, and memory was confirmed
+to release properly when leaving a heavy HTML message for a light one
+(verified directly, not assumed) rather than accumulating. Could not
+reproduce a 600MB figure under any tested scenario; a plausible
+explanation is Windows attributing a large (1GB+) real mailbox's SQLite
+file-cache pages to the process's Task Manager "Memory" column, which is
+normal, reclaimable OS caching rather than an application leak. No
+changes made based on unreproduced numbers - see RELEASE_NOTES for the
+full checkpoint table if this needs revisiting with a live large mailbox.
+
+### Changed: app icon
+
+Replaced the black-and-white envelope glyph with a padlock whose shackle
+*is* a bold "U" (not a separate letterform placed on a generic lock).
+The previous icon's body was an elongated ~1.68:1 bar that read as
+stretched inside a square canvas; the new mark uses tighter, closer-to-
+square proportions and is verified pixel-exact centered (equal left/
+right and top/bottom margins) at every size from 16 to 256px, work that
+surfaced and fixed a real off-by-half-stroke-width vertical centering
+bug along the way. Same white-fill/black-stroke treatment as before
+(self-contrasts on both light and dark backgrounds) and the same
+draw-fresh-per-size approach with flat pixel minimums for stroke width
+and the U's inner gap, so it stays legible rather than collapsing into a
+blob at 16-24px.
+
+---
+
 ## v1.2.0
 
 Complete privacy-focused visual redesign, built on top of v1.1.0's icon
