@@ -52,6 +52,18 @@ PH_VERIFY = "Verifying"
 # so opening them is instant and works offline.
 BODY_BACKFILL_LIMIT = 200
 
+# How many of the newest messages a routine sync caches per account, per
+# folder. This is a NETWORK/CACHE bound, not a display limit (the UI shows
+# 100 rows at a time) and not a ceiling on what the cache may ever hold:
+# older batches are fetched on demand when the user pages past the cached
+# boundary (see fetch_older_messages / OlderFetchWorker). Without it, a
+# 25,000-message account downloaded metadata for all 25,000 on first run.
+INITIAL_SYNC_LIMIT = 200
+
+# How many additional older messages one "load more past the cache
+# boundary" fetch pulls down.
+OLDER_BATCH_SIZE = 200
+
 
 def friendly_error(e: Exception) -> str:
     """Turn raw client errors into messages a user can act on."""
@@ -181,8 +193,9 @@ class AccountSyncWorker(QThread):
             if self._stopped():
                 return folder_counts
             self.progress.emit(aid, PH_LIST, 0, 0)
-            ids = client.list_all_message_ids(
+            ids, more_remain = client.list_recent_message_ids(
                 folder,
+                limit=INITIAL_SYNC_LIMIT,
                 on_page=lambda n, f=folder: (
                     log.info("Account %s: %s list - %d ids so far",
                              aid, f, n),
@@ -216,7 +229,13 @@ class AccountSyncWorker(QThread):
                 return folder_counts
 
             self.progress.emit(aid, PH_INDEX, 0, 0)
-            db.replace_folder_uids(aid, folder, ids)
+            # Prune server-side deletions only when this listing covered
+            # the WHOLE folder. With a capped listing, everything older
+            # than the cap is legitimately cached but absent from `ids` -
+            # pruning against a partial list would delete exactly the
+            # older mail the cache exists to keep.
+            if not more_remain:
+                db.replace_folder_uids(aid, folder, ids)
             if failed_ids:
                 log.warning("Account %s: %s - %d messages failed to download",
                             aid, folder, len(failed_ids))
@@ -265,8 +284,14 @@ class AccountSyncWorker(QThread):
                 self.progress.emit(aid, PH_LIST, 0, 0)
                 uids = client.list_uids(folder)
                 folder_counts[folder] = len(uids)
+                # Listing UIDs is one cheap SEARCH, so the full list is
+                # kept (pruning below stays correct); what's capped is the
+                # expensive part - the sequential per-message header
+                # fetch. UIDs come back ascending, so the newest are the
+                # tail.
+                recent_uids = uids[-INITIAL_SYNC_LIMIT:] if INITIAL_SYNC_LIMIT else uids
                 existing = set(db.get_folder_uids(aid, folder))
-                new_uids = [u for u in uids if u not in existing]
+                new_uids = [u for u in recent_uids if u not in existing]
                 total = len(new_uids)
                 log.info("Account %s: %s - %d on server, %d new",
                          aid, folder, len(uids), total)
@@ -455,6 +480,147 @@ class BodyFetchWorker(QThread):
         except Exception as e:
             log.error("Body fetch failed for email %s: %s", row.get("id"), e)
             self.failed.emit(row["id"], str(e))
+        finally:
+            db.close()
+
+
+class OlderFetchWorker(QThread):
+    """Fetches the next batch of messages OLDER than what's already
+    cached for one account/folder - the on-demand half of the capped
+    sync policy.
+
+    Routine sync deliberately caches only the newest INITIAL_SYNC_LIMIT
+    messages; this is what runs when the user pages past that boundary,
+    so a large mailbox stays reachable without ever having mirrored it.
+    Already-cached ids are filtered out before any per-message fetch, so
+    paging back repeatedly never re-downloads the same message twice.
+    """
+
+    loaded = Signal(int, int)      # account_id, messages actually added
+    failed = Signal(int, str)      # account_id, reason
+
+    def __init__(self, db_path: str, account: dict, folder: str = "inbox",
+                 batch_size: int = OLDER_BATCH_SIZE, parent=None):
+        super().__init__(parent)
+        self.db_path = db_path
+        self.account = account
+        self.folder = folder
+        self.batch_size = batch_size
+
+    def run(self) -> None:
+        db = Database(self.db_path)
+        aid = self.account["id"]
+        added = 0
+        try:
+            cached = set(db.get_folder_uids(aid, self.folder))
+            pending: list[dict] = []
+
+            if self.account["provider"] == "gmail":
+                client = GmailClient(self.account["email"])
+                # Ask for enough newest-first ids to reach past what's
+                # cached, then keep only the ones we don't already have.
+                ids, _more = client.list_recent_message_ids(
+                    self.folder, limit=len(cached) + self.batch_size,
+                )
+                new_ids = [i for i in ids if i not in cached][:self.batch_size]
+                if new_ids:
+                    client.fetch_metadata(
+                        new_ids, aid, self.folder, pending.append,
+                    )
+            else:
+                imap = ImapClient(self.account)
+                try:
+                    uids = imap.list_uids(self.folder)
+                    # UIDs ascend, so the newest uncached ones are the
+                    # tail of what's left after removing the cache.
+                    uncached = [u for u in uids if u not in cached]
+                    batch = uncached[-self.batch_size:]
+                    if batch and imap.select_for_reading(self.folder):
+                        for uid in reversed(batch):
+                            msg = imap.fetch_headers(self.folder, uid, aid)
+                            if msg is not None:
+                                pending.append(msg)
+                finally:
+                    imap.close()
+
+            if pending:
+                db.upsert_emails(pending)
+                added = len(pending)
+            log.info("Account %s: fetched %d older messages from %s",
+                     aid, added, self.folder)
+            self.loaded.emit(aid, added)
+        except Exception as e:
+            reason = friendly_error(e)
+            log.error("Older-message fetch failed for account %s: %s", aid, reason)
+            self.failed.emit(aid, reason)
+        finally:
+            db.close()
+
+
+class RemoteSearchWorker(QThread):
+    """Runs a provider-side search for one account and caches the hits.
+
+    The local cache holds only the newest INITIAL_SYNC_LIMIT messages, so
+    searching for something older would otherwise come back empty. This
+    asks the provider to do the searching - Gmail via its own `q` query
+    syntax, IMAP via server-side SEARCH TEXT - and caches only the
+    matches. Nothing else is downloaded: finding one old invoice costs
+    one search plus that message's metadata, not a mailbox mirror.
+    """
+
+    loaded = Signal(int, int)   # account_id, messages added to the cache
+    failed = Signal(int, str)   # account_id, reason
+
+    def __init__(self, db_path: str, account: dict, query: str,
+                 folder: str = "inbox", limit: int = 100, parent=None):
+        super().__init__(parent)
+        self.db_path = db_path
+        self.account = account
+        self.query = query
+        self.folder = folder
+        self.limit = limit
+
+    def run(self) -> None:
+        db = Database(self.db_path)
+        aid = self.account["id"]
+        added = 0
+        try:
+            cached = set(db.get_folder_uids(aid, self.folder))
+            pending: list[dict] = []
+
+            if self.account["provider"] == "gmail":
+                client = GmailClient(self.account["email"])
+                ids, _more = client.list_recent_message_ids(
+                    self.folder, limit=self.limit, query=self.query,
+                )
+                new_ids = [i for i in ids if i not in cached]
+                if new_ids:
+                    client.fetch_metadata(
+                        new_ids, aid, self.folder, pending.append,
+                    )
+            else:
+                imap = ImapClient(self.account)
+                try:
+                    uids = imap.search_uids(self.folder, self.query, self.limit)
+                    new_uids = [u for u in uids if u not in cached]
+                    if new_uids and imap.select_for_reading(self.folder):
+                        for uid in new_uids:
+                            msg = imap.fetch_headers(self.folder, uid, aid)
+                            if msg is not None:
+                                pending.append(msg)
+                finally:
+                    imap.close()
+
+            if pending:
+                db.upsert_emails(pending)
+                added = len(pending)
+            log.info("Account %s: remote search '%s' cached %d new message(s)",
+                     aid, self.query, added)
+            self.loaded.emit(aid, added)
+        except Exception as e:
+            reason = friendly_error(e)
+            log.error("Remote search failed for account %s: %s", aid, reason)
+            self.failed.emit(aid, reason)
         finally:
             db.close()
 

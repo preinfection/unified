@@ -1,6 +1,10 @@
 """Settings: sync interval, notifications, Google OAuth client file,
-accounts - presented as grouped, dividered rows in elevated panels rather
-than a stack of QGroupBox frames, matching the rest of the app's cards.
+accounts - presented as a rail-navigated set of pages (General / Google
+account / Connected accounts) rather than one long scrolling column.
+Translated from the reference's "rail" layout: a narrow icon+label strip
+on the left drives a QStackedWidget on the right, the same structural
+pattern the reference uses to keep a settings surface from turning into
+an endless scroll once it has more than a couple of groups.
 """
 
 from __future__ import annotations
@@ -8,8 +12,9 @@ from __future__ import annotations
 import logging
 import shutil
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QFileDialog,
     QFrame,
@@ -20,6 +25,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -27,8 +34,10 @@ from PySide6.QtWidgets import (
 from app import APP_NAME, __version__, config
 from app.services.account_manager import AccountManager
 from app.ui import theme as t
+from app.ui.components.button import AccentButton
+from app.ui.components.section_header import DialogHeading, SectionHeader
 from app.ui.components.toggle import Toggle
-from app.ui.svg_icon import simple_icon
+from app.ui.svg_icon import icon_set, simple_icon
 
 log = logging.getLogger(__name__)
 
@@ -66,11 +75,35 @@ def _row(label_text: str, control: QWidget) -> QWidget:
     return row
 
 
-def _group_label(text: str) -> QLabel:
-    label = QLabel(text.upper())
-    label.setObjectName("sectionLabel")
-    label.setFont(t.make_font("section_label"))
-    return label
+class _RailItem(QToolButton):
+    """One entry in the settings rail: icon above a short label, checked
+    when its page is active - the reference's rail-tab anatomy."""
+
+    def __init__(self, icon_name: str, label: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("settingsRailItem")
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.setIcon(icon_set(
+            icon_name, 20, normal=t.ICON_SECONDARY, active=t.ICON_ACTIVE,
+            selected=t.ICON_SELECTED,
+        ))
+        self.setIconSize(QSize(20, 20))
+        self.setText(label)
+        self.setFont(t.make_font("caption"))
+        self.setFixedWidth(86)
+
+
+def _page(*widgets: QWidget) -> QWidget:
+    page = QWidget()
+    col = QVBoxLayout(page)
+    col.setContentsMargins(0, 0, 0, 0)
+    col.setSpacing(t.SPACE_MD)
+    for w in widgets:
+        col.addWidget(w)
+    col.addStretch(1)
+    return page
 
 
 class SettingsDialog(QDialog):
@@ -83,54 +116,91 @@ class SettingsDialog(QDialog):
         self.accounts_changed = False
 
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(480)
+        self.setMinimumSize(620, 460)
         self.setObjectName("settingsDialog")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(t.SPACE_LG, t.SPACE_MD, t.SPACE_LG, t.SPACE_MD)
         outer.setSpacing(t.SPACE_LG)
 
-        # -- header
+        # -- header (stays put across every page)
         header = QHBoxLayout()
-        title = QLabel("Settings")
-        title.setFont(t.make_font("dialog_heading"))
-        header.addWidget(title)
+        header.addWidget(DialogHeading("Settings"))
         header.addStretch(1)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setFont(t.make_font("button"))
         cancel_btn.clicked.connect(self.reject)
         header.addWidget(cancel_btn)
-        save_btn = QPushButton(" Save")
-        save_btn.setObjectName("composeButton")
-        save_btn.setFont(t.make_font("button"))
+        save_btn = AccentButton(" Save")
         save_btn.setIcon(simple_icon("check", 13, t.TEXT_ON_ACCENT))
         save_btn.setDefault(True)
         save_btn.clicked.connect(self._save)
         header.addWidget(save_btn)
         outer.addLayout(header)
 
-        # --- General ---
-        outer.addWidget(_group_label("General"))
+        # -- rail + pages
+        body = QHBoxLayout()
+        body.setSpacing(t.SPACE_LG)
+
+        rail_col = QVBoxLayout()
+        rail_col.setSpacing(t.SPACE_XS)
+        self._rail_group = QButtonGroup(self)
+        self._rail_group.setExclusive(True)
+        rail_specs = [
+            ("settings", "General"),
+            ("lock", "Google"),
+            ("inbox", "Accounts"),
+        ]
+        rail_buttons = []
+        for icon_name, label in rail_specs:
+            btn = _RailItem(icon_name, label)
+            self._rail_group.addButton(btn)
+            rail_col.addWidget(btn)
+            rail_buttons.append(btn)
+        rail_col.addStretch(1)
+        body.addLayout(rail_col)
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._build_general_page())
+        self.stack.addWidget(self._build_google_page())
+        self.stack.addWidget(self._build_accounts_page())
+        body.addWidget(self.stack, stretch=1)
+        outer.addLayout(body, stretch=1)
+
+        for i, btn in enumerate(rail_buttons):
+            btn.clicked.connect(lambda _=False, idx=i: self.stack.setCurrentIndex(idx))
+        rail_buttons[0].setChecked(True)
+
+        version_label = QLabel(f"{APP_NAME} v{__version__}")
+        version_label.setObjectName("tertiary")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(version_label)
+
+    # ------------------------------------------------------------------ pages
+
+    def _build_general_page(self) -> QWidget:
         self.interval_spin = QSpinBox()
         self.interval_spin.setObjectName("settingsControl")
         self.interval_spin.setRange(1, 120)
         self.interval_spin.setSuffix(" min")
-        self.interval_spin.setValue(int(settings.get("sync_interval_minutes")))
+        self.interval_spin.setValue(int(self.settings.get("sync_interval_minutes")))
         self.shown_spin = QSpinBox()
         self.shown_spin.setObjectName("settingsControl")
         self.shown_spin.setRange(100, 10000)
         self.shown_spin.setSingleStep(100)
-        self.shown_spin.setValue(int(settings.get("messages_shown")))
+        self.shown_spin.setValue(int(self.settings.get("messages_shown")))
         self.notify_toggle = Toggle()
-        self.notify_toggle.setChecked(bool(settings.get("notifications_enabled")))
-        outer.addWidget(_panel(
-            _row("Sync every", self.interval_spin),
-            _row("Messages shown per view", self.shown_spin),
-            _row("Desktop notifications for new mail", self.notify_toggle),
-        ))
+        self.notify_toggle.setChecked(bool(self.settings.get("notifications_enabled")))
+        return _page(
+            SectionHeader("General"),
+            _panel(
+                _row("Sync every", self.interval_spin),
+                _row("Messages shown per view", self.shown_spin),
+                _row("Desktop notifications for new mail", self.notify_toggle),
+            ),
+        )
 
-        # --- Google OAuth client ---
-        outer.addWidget(_group_label("Google account"))
+    def _build_google_page(self) -> QWidget:
         google_panel = QWidget()
         google_panel.setObjectName("settingsPanel")
         gv = QVBoxLayout(google_panel)
@@ -146,10 +216,9 @@ class SettingsDialog(QDialog):
         pick.clicked.connect(self._pick_google_file)
         gv.addWidget(self.google_label)
         gv.addWidget(pick)
-        outer.addWidget(google_panel)
+        return _page(SectionHeader("Google account"), google_panel)
 
-        # --- Accounts ---
-        outer.addWidget(_group_label("Connected accounts"))
+    def _build_accounts_page(self) -> QWidget:
         accounts_panel = QWidget()
         accounts_panel.setObjectName("settingsPanel")
         av = QVBoxLayout(accounts_panel)
@@ -157,7 +226,6 @@ class SettingsDialog(QDialog):
         av.setSpacing(t.SPACE_SM)
         self.account_list = QListWidget()
         self.account_list.setFrameShape(QListWidget.Shape.NoFrame)
-        self.account_list.setMaximumHeight(140)
         self._reload_accounts()
         remove_row = QHBoxLayout()
         remove_btn = QPushButton("  Remove selected account")
@@ -166,15 +234,11 @@ class SettingsDialog(QDialog):
         remove_btn.clicked.connect(self._remove_selected)
         remove_row.addWidget(remove_btn)
         remove_row.addStretch(1)
-        av.addWidget(self.account_list)
+        av.addWidget(self.account_list, stretch=1)
         av.addLayout(remove_row)
-        outer.addWidget(accounts_panel)
+        return _page(SectionHeader("Connected accounts"), accounts_panel)
 
-        outer.addStretch(1)
-        version_label = QLabel(f"{APP_NAME} v{__version__}")
-        version_label.setObjectName("tertiary")
-        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        outer.addWidget(version_label)
+    # ------------------------------------------------------------------ misc
 
     def _update_google_label(self) -> None:
         if config.google_client_secrets_path().exists():

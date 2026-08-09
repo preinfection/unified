@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
 from app import APP_NAME
 from app.ui import theme as t
 from app.ui.components.account_item import AccountItem
+from app.ui.components.nav_pill import NavPill
+from app.ui.components.section_header import SectionHeader
 from app.ui.svg_icon import simple_icon, icon_set
 
 VIEW_ITEMS = [
@@ -52,7 +54,7 @@ class SidebarWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
-        self.setFixedWidth(248)
+        self.setFixedWidth(t.SIDEBAR_WIDTH)
 
         self._account_items: dict[int, AccountItem] = {}
         self._current_view: str | None = "inbox"
@@ -69,11 +71,8 @@ class SidebarWidget(QWidget):
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         for view, label, icon_name in VIEW_ITEMS:
-            btn = QPushButton(f"  {label}")
-            btn.setObjectName("navPill")
+            btn = NavPill(f"  {label}")
             btn.setFont(t.make_font("nav_label"))
-            btn.setCheckable(True)
-            btn.setFlat(True)
             btn.setIcon(_nav_icon(icon_name))
             btn.setIconSize(QSize(t.ICON_SIZE_NAV, t.ICON_SIZE_NAV))
             btn.clicked.connect(lambda _=False, v=view: self._on_nav_clicked(v))
@@ -82,10 +81,7 @@ class SidebarWidget(QWidget):
             root.addWidget(btn)
 
         root.addSpacing(t.SPACE_LG)
-        section = QLabel("ACCOUNTS")
-        section.setObjectName("sectionLabel")
-        section.setFont(t.make_font("section_label"))
-        root.addWidget(section)
+        root.addWidget(SectionHeader("Accounts"))
         root.addSpacing(t.SPACE_XXS)
 
         scroll = QScrollArea()

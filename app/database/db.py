@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS emails (
     is_read         INTEGER NOT NULL DEFAULT 0,
     is_starred      INTEGER NOT NULL DEFAULT 0,
     has_attachments INTEGER NOT NULL DEFAULT 0,
+    attachments     TEXT NOT NULL DEFAULT '',
     body_fetched    INTEGER NOT NULL DEFAULT 0,
     UNIQUE (account_id, folder, uid)
 );
@@ -83,6 +84,13 @@ class Database:
                     " INTEGER NOT NULL DEFAULT 0"
                 )
         email_cols = {row[1] for row in conn.execute("PRAGMA table_info(emails)")}
+        if "attachments" not in email_cols:
+            # JSON list of attachment metadata (name/type/size/verdict),
+            # produced by message_parser.list_attachments. Metadata only -
+            # payloads are never cached.
+            conn.execute(
+                "ALTER TABLE emails ADD COLUMN attachments TEXT NOT NULL DEFAULT ''"
+            )
         if "body_fetched" not in email_cols:
             conn.execute(
                 "ALTER TABLE emails ADD COLUMN body_fetched"
@@ -202,16 +210,18 @@ class Database:
     _UPSERT_SQL = """
         INSERT INTO emails (account_id, uid, folder, sender_name, sender_email,
             recipients, subject, snippet, body_text, body_html, date_ts,
-            is_read, is_starred, has_attachments, body_fetched)
+            is_read, is_starred, has_attachments, attachments, body_fetched)
         VALUES (:account_id, :uid, :folder, :sender_name, :sender_email,
             :recipients, :subject, :snippet, :body_text, :body_html, :date_ts,
-            :is_read, :is_starred, :has_attachments, :body_fetched)
+            :is_read, :is_starred, :has_attachments, :attachments, :body_fetched)
         ON CONFLICT (account_id, folder, uid) DO UPDATE SET
             is_read = excluded.is_read,
             is_starred = excluded.is_starred,
             snippet = excluded.snippet,
             has_attachments = CASE WHEN excluded.body_fetched = 1
                 THEN excluded.has_attachments ELSE has_attachments END,
+            attachments = CASE WHEN excluded.body_fetched = 1
+                THEN excluded.attachments ELSE attachments END,
             body_text = CASE WHEN excluded.body_fetched = 1
                 THEN excluded.body_text ELSE body_text END,
             body_html = CASE WHEN excluded.body_fetched = 1
@@ -231,6 +241,7 @@ class Database:
         "is_read": 0,
         "is_starred": 0,
         "has_attachments": 0,
+        "attachments": "",
         "body_fetched": 0,
     }
 

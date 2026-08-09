@@ -6,7 +6,6 @@ import logging
 
 from PySide6.QtCore import QSize, Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -22,6 +21,9 @@ from app.email import smtp_client
 from app.email.gmail_client import GmailClient
 from app.email.imap_client import ImapClient
 from app.ui import theme as t
+from app.ui.components.button import AccentButton
+from app.ui.components.dropdown import Dropdown
+from app.ui.components.section_header import DialogHeading
 from app.ui.svg_icon import simple_icon
 
 log = logging.getLogger(__name__)
@@ -98,9 +100,7 @@ class ComposeDialog(QDialog):
         # -- header: title, discard, Send
         header = QHBoxLayout()
         header.setSpacing(t.SPACE_SM)
-        title = QLabel("New Message")
-        title.setFont(t.make_font("dialog_heading"))
-        header.addWidget(title)
+        header.addWidget(DialogHeading("New Message"))
         header.addStretch(1)
 
         discard_btn = QPushButton()
@@ -112,9 +112,7 @@ class ComposeDialog(QDialog):
         discard_btn.clicked.connect(self.reject)
         header.addWidget(discard_btn)
 
-        self.send_btn = QPushButton(" Send")
-        self.send_btn.setObjectName("composeButton")
-        self.send_btn.setFont(t.make_font("button"))
+        self.send_btn = AccentButton(" Send")
         self.send_btn.setIcon(simple_icon("paper", 14, t.TEXT_ON_ACCENT))
         self.send_btn.setIconSize(QSize(14, 14))
         self.send_btn.setDefault(True)
@@ -129,11 +127,11 @@ class ComposeDialog(QDialog):
         fields_col.setContentsMargins(t.SPACE_MD, t.SPACE_SM, t.SPACE_MD, t.SPACE_SM)
         fields_col.setSpacing(t.SPACE_XS)
 
-        self.from_combo = QComboBox()
-        self.from_combo.setObjectName("composeField")
-        for account in accounts:
-            self.from_combo.addItem(account["email"], account)
-        fields_col.addWidget(_field_row("From", self.from_combo))
+        self.from_dropdown = Dropdown(
+            [(a["email"], a) for a in accounts],
+            current=accounts[0] if accounts else None,
+        )
+        fields_col.addWidget(_field_row("From", self.from_dropdown))
 
         self.to_edit = QLineEdit()
         self.to_edit.setObjectName("composeField")
@@ -165,7 +163,7 @@ class ComposeDialog(QDialog):
         self.status_label.setText(text)
 
     def _on_send(self) -> None:
-        account = self.from_combo.currentData()
+        account = self.from_dropdown.value()
         to = self.to_edit.text().strip()
         if not account:
             QMessageBox.warning(self, "No account", "Add an account first.")

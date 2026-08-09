@@ -24,16 +24,18 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QFont, QFontMetrics, QPainter
+from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from app.ui import theme as t
 from app.ui.components.avatar import paint_avatar
 from app.ui.svg_icon import tinted_pixmap
 
-ROW_HEIGHT = 60
-HEADER_HEIGHT = 34
-_AVATAR_SIZE = 34
+# Denser than before, following the reference's compact row rhythm while
+# staying readable for two lines of real email metadata.
+ROW_HEIGHT = 58
+HEADER_HEIGHT = 30
+_AVATAR_SIZE = 32
 ROLE_MSG = Qt.ItemDataRole.UserRole
 
 
@@ -138,17 +140,32 @@ class EmailRowDelegate(QStyledItemDelegate):
 
     def _paint_row(self, painter: QPainter, option: QStyleOptionViewItem,
                    msg: dict) -> None:
-        rect = option.rect.adjusted(6, 2, -6, -2)
+        rect = option.rect.adjusted(8, 3, -8, -3)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         if selected:
-            painter.setPen(Qt.PenStyle.NoPen)
+            # A fill paired with a visible edge, not fill alone - the same
+            # pairing the nav pills and section cards use for "selected",
+            # so a glance at any part of the app reads it the same way.
+            painter.setPen(QPen(t.qcolor(t.ACCENT), 1))
             painter.setBrush(t.qcolor(t.ACCENT_SOFT_BG))
-            painter.drawRoundedRect(rect, t.RADIUS_SM, t.RADIUS_SM)
+            painter.drawRoundedRect(
+                rect.adjusted(0, 0, -1, -1), t.RADIUS_MD, t.RADIUS_MD
+            )
+            # Left accent bar, the same "this one is active" cue the sidebar
+            # nav pills and tabs use - a filled tint alone reads as hover at
+            # a glance, the bar makes the selected row unambiguous.
+            bar_h = rect.height() * 0.55
+            bar = QRectF(
+                rect.left(), rect.top() + (rect.height() - bar_h) / 2, 3, bar_h,
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(t.qcolor(t.ACCENT))
+            painter.drawRoundedRect(bar, 1.5, 1.5)
         elif hovered:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(t.qcolor(t.BG_HOVER))
-            painter.drawRoundedRect(rect, t.RADIUS_SM, t.RADIUS_SM)
+            painter.drawRoundedRect(rect, t.RADIUS_MD, t.RADIUS_MD)
 
         unread = not msg["is_read"]
         pad = 10

@@ -96,3 +96,114 @@ def test_malformed_html_falls_back_to_original():
     html = '<img src="http://x/a.png" width="1200" <<<broken'
     out = normalize_image_sizing(html, max_width=560)
     assert out  # some non-empty result, whichever path it took
+
+
+# --------------------------------------------------------------------------
+# Hidden preheader text ("Save 40% today only..." stuffed before the visible
+# body via display:none) is real, visible-to-QTextDocument text - QTextDocument
+# does not honor display:none. Confirmed by rendering a real promotional-
+# email fixture through the actual widget and finding the "hidden" text as
+# the first line of the laid-out document (see scratch probe during
+# development); these lock the fix in as a regression test.
+# --------------------------------------------------------------------------
+
+def test_inline_display_none_element_is_dropped():
+    html = (
+        '<div style="display:none;font-size:1px;">Secret preheader text</div>'
+        "<p>Visible body</p>"
+    )
+    out = normalize_image_sizing(html, max_width=560)
+    assert "Secret preheader text" not in out
+    assert "<p>Visible body</p>" in out
+
+
+def test_hidden_element_nested_content_fully_dropped():
+    # Tags and attributes inside the hidden subtree must vanish too, not
+    # just the top-level element's own text.
+    html = (
+        '<div style="display:none"><span>a</span> <b>b</b>'
+        '<img src="http://x/hidden.png"></div><p>After</p>'
+    )
+    out = normalize_image_sizing(html, max_width=560)
+    assert "hidden.png" not in out
+    assert "<span>" not in out
+    assert "<p>After</p>" in out
+
+
+def test_class_based_display_none_in_style_block_is_dropped():
+    html = (
+        "<style>.preheader{display:none;mso-hide:all;}</style>"
+        '<div class="preheader">Limited time offer inside</div>'
+        "<p>Real content</p>"
+    )
+    out = normalize_image_sizing(html, max_width=560)
+    assert "Limited time offer inside" not in out
+    assert "<p>Real content</p>" in out
+
+
+def test_visible_sibling_after_hidden_block_is_kept():
+    html = (
+        '<div style="display:none">hidden</div>'
+        "<p>First</p><p>Second</p>"
+    )
+    out = normalize_image_sizing(html, max_width=560)
+    assert "hidden" not in out
+    assert "<p>First</p>" in out
+    assert "<p>Second</p>" in out
+
+
+# --------------------------------------------------------------------------
+# CSS background-image is not supported by QTextDocument at all (confirmed
+# by rendering a fixture and inspecting the document's actual image
+# resources: zero were picked up for either a hero-banner or a button
+# background). table/td/th/tr/body get it rewritten to the legacy
+# background= HTML attribute, which Qt *does* paint (confirmed by
+# inspecting the resulting QTextTableCellFormat's brush: a real, non-null
+# texture, not a no-op) - see scratch probe during development. Anything
+# else gets a synthetic <img> child instead, since there is no native
+# attribute for it.
+# --------------------------------------------------------------------------
+
+def test_inline_background_image_on_td_becomes_background_attribute():
+    html = '<table><tr><td style="background-image:url(\'http://x/hero.jpg\');padding:8px;">Hi</td></tr></table>'
+    out = normalize_image_sizing(html, max_width=560)
+    assert 'background="http://x/hero.jpg"' in out
+    assert "padding:8px" in out  # non-size style declarations still kept
+    assert "<img" not in out  # td got the native attribute, not a fallback img
+
+
+def test_class_based_background_image_on_td_becomes_background_attribute():
+    html = (
+        "<style>.hero{background-image:url('http://x/hero.jpg');}</style>"
+        '<table><tr><td class="hero">Hi</td></tr></table>'
+    )
+    out = normalize_image_sizing(html, max_width=560)
+    assert 'background="http://x/hero.jpg"' in out
+
+
+def test_background_image_on_div_gets_synthetic_img_fallback():
+    # div has no native "background" attribute support in Qt's engine, so
+    # the only way to make the graphic visible at all is a real <img>.
+    html = '<div style="background-image:url(\'http://x/banner.png\');">Text</div>'
+    out = normalize_image_sizing(html, max_width=560)
+    assert 'src="http://x/banner.png"' in out
+    assert "<div" in out
+    assert "Text" in out
+
+
+def test_background_color_alone_is_not_mistaken_for_background_image():
+    html = '<td style="background-color:#ffcc00;">Hi</td>'
+    out = normalize_image_sizing(html, max_width=560)
+    assert "background=" not in out
+    assert "<img" not in out
+
+
+def test_srcset_and_sizes_stripped_from_img():
+    html = (
+        '<img src="http://x/a.png" width="24" '
+        'srcset="http://x/a@2x.png 2x" sizes="24px">'
+    )
+    out = normalize_image_sizing(html, max_width=560)
+    assert "srcset" not in out
+    assert "sizes=" not in out
+    assert 'src="http://x/a.png"' in out

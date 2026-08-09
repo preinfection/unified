@@ -40,23 +40,41 @@ class GmailClient:
         """Return every message id in a folder, newest first, via pagination.
 
         on_page(count_so_far) is called after each page for progress display.
+
+        Walks the entire folder - for a 25,000-message mailbox that is
+        ~50 list calls. Routine sync uses list_recent_message_ids()
+        instead; this remains for callers that genuinely need the
+        complete server-side id set (e.g. verifying/pruning deletions).
+        """
+        ids, _more = self.list_recent_message_ids(folder, limit=None, on_page=on_page)
+        return ids
+
+    def list_recent_message_ids(
+        self, folder: str, limit: int | None, on_page=None, query: str = "",
+    ) -> tuple[list[str], bool]:
+        """The newest `limit` message ids in a folder (None = no cap),
+        plus whether the folder holds more than that server-side.
+
+        Gmail returns ids newest-first, so capping means stopping after
+        one or two list calls instead of paginating the whole mailbox -
+        the difference between ~1 and ~50 API round trips on a large
+        account. `query` passes a Gmail search expression through to the
+        server so search can reach mail that was never cached locally,
+        without mirroring the mailbox to make it findable.
         """
         label = FOLDER_LABELS[folder]
         ids: list[str] = []
         page_token: str | None = None
-        while True:
+        while limit is None or len(ids) < limit:
+            page_size = 500 if limit is None else min(500, limit - len(ids))
+            params = dict(
+                userId="me", labelIds=[label], maxResults=page_size,
+                pageToken=page_token,
+            )
+            if query:
+                params["q"] = query
             try:
-                resp = (
-                    self.service.users()
-                    .messages()
-                    .list(
-                        userId="me",
-                        labelIds=[label],
-                        maxResults=500,
-                        pageToken=page_token,
-                    )
-                    .execute()
-                )
+                resp = self.service.users().messages().list(**params).execute()
             except HttpError as e:
                 raise GmailClientError(f"Gmail list failed: {e}") from e
             ids.extend(m["id"] for m in resp.get("messages", []))
@@ -64,7 +82,9 @@ class GmailClient:
                 on_page(len(ids))
             page_token = resp.get("nextPageToken")
             if not page_token:
-                return ids
+                return ids, False  # reached the end of the folder
+        # Stopped at the cap with a page token still outstanding: more exist.
+        return ids[:limit], True
 
     def fetch_metadata(
         self,

@@ -14,6 +14,7 @@ from PySide6.QtCore import QSize, Signal
 from PySide6.QtWidgets import QLineEdit, QPushButton, QSizePolicy, QToolBar, QWidget
 
 from app.ui import theme as t
+from app.ui.components.button import AccentButton
 from app.ui.svg_icon import icon_set, simple_icon
 
 _ICON_SIZE = 18
@@ -30,7 +31,7 @@ def _icon_button(icon_name: str, tooltip: str, *, checkable: bool = False) -> QP
         normal=t.ICON_SECONDARY, active=t.ICON_ACTIVE,
         selected=t.ICON_SELECTED, disabled=t.ICON_DISABLED,
     ))
-    btn.setFixedSize(34, 34)
+    btn.setFixedSize(t.HEIGHT_MD, t.HEIGHT_MD)
     return btn
 
 
@@ -44,8 +45,7 @@ class TopToolBar(QToolBar):
         super().__init__(parent)
         self.setMovable(False)
 
-        compose_btn = QPushButton(" Compose")
-        compose_btn.setObjectName("composeButton")
+        compose_btn = AccentButton(" Compose")
         compose_btn.setIcon(simple_icon("compose", 16, t.TEXT_ON_ACCENT))
         compose_btn.setIconSize(QSize(16, 16))
         compose_btn.clicked.connect(self.compose_clicked.emit)
@@ -70,7 +70,8 @@ class TopToolBar(QToolBar):
         self.search_edit.setObjectName("searchField")
         self.search_edit.setPlaceholderText("Search all accounts...")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setFixedWidth(320)
+        self.search_edit.setFixedWidth(340)
+        self.search_edit.setMinimumHeight(t.HEIGHT_MD - 4)
         self.search_edit.addAction(
             simple_icon("search", 15, t.TEXT_TERTIARY), QLineEdit.ActionPosition.LeadingPosition,
         )

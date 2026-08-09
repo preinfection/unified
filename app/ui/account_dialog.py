@@ -6,7 +6,6 @@ import logging
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -23,6 +22,9 @@ from PySide6.QtWidgets import (
 from app.auth import gmail_oauth
 from app.services.account_manager import AccountError, AccountManager
 from app.ui import theme as t
+from app.ui.components.button import AccentButton
+from app.ui.components.dropdown import Dropdown
+from app.ui.components.section_header import DialogHeading, SectionHeader
 from app.ui.svg_icon import simple_icon
 
 log = logging.getLogger(__name__)
@@ -93,32 +95,52 @@ class AccountDialog(QDialog):
         self._worker: QThread | None = None
 
         self.setWindowTitle("Add Account")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(440)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setContentsMargins(t.SPACE_LG, t.SPACE_MD, t.SPACE_LG, t.SPACE_MD)
+        layout.setSpacing(t.SPACE_MD)
 
-        form_top = QFormLayout()
-        self.type_combo = QComboBox()
-        self.type_combo.addItems(["Gmail (sign in with Google)", "Custom IMAP/SMTP"])
-        form_top.addRow("Account type:", self.type_combo)
-        layout.addLayout(form_top)
+        layout.addWidget(DialogHeading("Add Account"))
+
+        layout.addWidget(SectionHeader("Account type"))
+        panel = QWidget()
+        panel.setObjectName("settingsPanel")
+        panel_col = QVBoxLayout(panel)
+        panel_col.setContentsMargins(t.SPACE_MD, t.SPACE_MD, t.SPACE_MD, t.SPACE_MD)
+        panel_col.setSpacing(t.SPACE_SM)
+
+        type_row = QHBoxLayout()
+        type_label = QLabel("Account type")
+        type_label.setFont(t.make_font("field_label"))
+        type_label.setStyleSheet(f"color: {t.TEXT_TERTIARY};")
+        type_label.setFixedWidth(90)
+        type_row.addWidget(type_label)
+        self.type_dropdown = Dropdown(
+            [("Gmail (sign in with Google)", 0), ("Custom IMAP/SMTP", 1)], current=0
+        )
+        type_row.addWidget(self.type_dropdown, stretch=1)
+        panel_col.addLayout(type_row)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_gmail_page())
         self.stack.addWidget(self._build_imap_page())
-        layout.addWidget(self.stack)
-        self.type_combo.currentIndexChanged.connect(self.stack.setCurrentIndex)
+        panel_col.addWidget(self.stack)
+        self.type_dropdown.changed.connect(self.stack.setCurrentIndex)
+        layout.addWidget(panel)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("secondary")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        self.buttons = QDialogButtonBox()
+        self.cancel_btn = self.buttons.addButton(
+            "Cancel", QDialogButtonBox.ButtonRole.RejectRole
         )
-        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Add Account")
+        self.ok_btn = AccentButton(" Add Account")
+        self.ok_btn.setIcon(simple_icon("check", 13, t.TEXT_ON_ACCENT))
+        self.buttons.addButton(self.ok_btn, QDialogButtonBox.ButtonRole.AcceptRole)
         self.buttons.accepted.connect(self._on_add)
         # rejected fires for the Cancel button and Esc; reject() is overridden
         # to turn it into "Cancel Login" while OAuth is running.
@@ -199,13 +221,11 @@ class AccountDialog(QDialog):
     # ----------------------------------------------------------------- actions
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
-        ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
-        cancel = self.buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        ok.setEnabled(not busy)
+        self.ok_btn.setEnabled(not busy)
         # The Cancel button stays enabled while busy and becomes the way to
         # abort a running Google sign-in.
-        cancel.setText("Cancel Login" if busy else "Cancel")
-        self.type_combo.setEnabled(not busy)
+        self.cancel_btn.setText("Cancel Login" if busy else "Cancel")
+        self.type_dropdown.setEnabled(not busy)
         self.stack.setEnabled(not busy)
         self.status_label.setText(message)
 
@@ -238,7 +258,7 @@ class AccountDialog(QDialog):
         event.accept()
 
     def _on_add(self) -> None:
-        if self.type_combo.currentIndex() == 0:
+        if self.type_dropdown.value() == 0:
             if not gmail_oauth.client_secrets_available():
                 QMessageBox.warning(
                     self,

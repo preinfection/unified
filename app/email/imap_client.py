@@ -78,6 +78,34 @@ class ImapClient:
             raise ImapClientError(f"IMAP search failed in {folder}")
         return [u.decode() for u in data[0].split()]
 
+    def search_uids(self, folder: str, text: str, limit: int = 200) -> list[str]:
+        """Server-side search: UIDs of messages whose subject, sender or
+        body contain `text`, newest first, capped at `limit`.
+
+        Lets Unified find mail it never cached without mirroring the
+        mailbox to make it searchable. TEXT is the broad IMAP criterion
+        (headers + body); it's supported far more widely than the
+        server-side full-text extensions, and unsupported/odd responses
+        degrade to an empty result rather than raising, so search simply
+        falls back to whatever the local cache already knows.
+        """
+        if not text.strip():
+            return []
+        if self._select_folder(folder, readonly=True) is None:
+            return []
+        try:
+            # IMAP requires the search string as a literal argument; the
+            # imaplib API handles quoting when it's passed separately
+            # from the criterion keyword.
+            status, data = self.conn.uid("SEARCH", None, "TEXT", f'"{text}"')
+        except Exception as e:
+            log.info("IMAP server-side search unavailable in %s: %s", folder, e)
+            return []
+        if status != "OK" or not data or data[0] is None:
+            return []
+        uids = [u.decode() for u in data[0].split()]
+        return list(reversed(uids))[:limit]  # newest first
+
     def fetch_headers(self, folder: str, uid: str, account_id: int) -> Optional[dict]:
         """Fetch headers/flags only (fast metadata pass); folder pre-selected."""
         status, msg_data = self.conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[HEADER])")

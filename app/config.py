@@ -57,9 +57,13 @@ _SETTINGS_FILE = "settings.json"
 DEFAULTS = {
     "sync_interval_minutes": 5,
     "notifications_enabled": True,
-    # Display limit for the message list; sync itself always fetches the
-    # complete mailbox.
-    "messages_shown": 1000,
+    # Display limit for the message list, and the increment "Load more"
+    # raises it by - NOT a cap on what sync fetches/caches (sync always
+    # indexes the complete mailbox in the background; this only bounds how
+    # many cached rows a view materializes into the UI at once). Kept
+    # small by default so the first paint of a large mailbox stays fast:
+    # 100, then "Load more" -> 200, then 300, and so on.
+    "messages_shown": 100,
 }
 
 

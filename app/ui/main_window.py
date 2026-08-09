@@ -14,6 +14,7 @@ Threading rules kept here:
 
 from __future__ import annotations
 
+import json
 import logging
 
 from PySide6.QtCore import Qt, QTimer
@@ -47,7 +48,9 @@ from app.services.sync_service import (
     ST_SYNCING,
     ST_WAITING,
     BodyFetchWorker,
+    OlderFetchWorker,
     RemoteActionWorker,
+    RemoteSearchWorker,
     SyncManager,
 )
 from app.ui.account_dialog import AccountDialog
@@ -56,6 +59,7 @@ from app.ui.components.empty_state import EmptyState
 from app.ui.components.loading_state import LoadingState
 from app.ui.components.preview_pane import PreviewPane
 from app.ui.components.sidebar import SidebarWidget
+from app.ui.components.toast import ToastHost
 from app.ui.components.toolbar import TopToolBar
 from app.ui.compose_dialog import ComposeDialog
 from app.ui.console import ConsoleWidget
@@ -76,6 +80,25 @@ PHASE_TEXT = {
     PH_INDEX: "Preparing mailbox...",
     PH_VERIFY: "Preparing mailbox...",
 }
+
+# Below this length a search string is treated as mid-typing: the local
+# cache is still searched live, but providers are not asked (a server-side
+# search per keystroke would be abusive and slow).
+_REMOTE_SEARCH_MIN_CHARS = 3
+
+
+def _decode_attachments(msg: dict) -> list[dict]:
+    """Attachment metadata is cached as a JSON string. A row written by an
+    older build (or a corrupted value) must degrade to "no per-file
+    metadata", never break opening the message."""
+    raw = msg.get("attachments") or ""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 # Sync status -> the color key StatusIndicator/theme.STATUS_COLORS understands.
 _STATUS_KEY = {
@@ -104,6 +127,26 @@ class MainWindow(QMainWindow):
         self._fetching_body_ids: set[int] = set()
         self._panel_account_id: int | None = None
         self._extra_limit = 0  # raised by the Load More button
+        # Tracks which account ids the sidebar was last built with, so a
+        # sync-progress-driven reload (fired roughly every 700ms while any
+        # account is syncing) can skip rebuilding every AccountItem widget
+        # when the account set itself hasn't changed - see reload_sidebar().
+        self._known_account_ids: set[int] = set()
+        # Which accounts actually produced a sync event since the last
+        # reload - lets the debounced reload skip re-querying the email
+        # list when the view on screen is scoped to an account that had
+        # nothing new happen (see _schedule_reload/_do_scheduled_reload).
+        self._dirty_account_ids: set[int] = set()
+        self._dirty_reload_all = False
+        # In-flight "fetch messages older than the cache" jobs, keyed by
+        # account, so paging repeatedly can't stack duplicate fetches.
+        self._older_workers: list[OlderFetchWorker] = []
+        self._older_fetch_ids: set[int] = set()
+        # In-flight provider-side searches, and the queries already asked
+        # of the providers this session (so retyping the same search does
+        # not re-hit the network).
+        self._search_workers: list[RemoteSearchWorker] = []
+        self._remote_searched: set[str] = set()
 
         self.setWindowTitle("Unified")
         self.setWindowIcon(make_app_icon())
@@ -113,6 +156,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_body()
         self._build_tray()
+        self.toasts = ToastHost(self)
         self.statusBar().showMessage("Ready")
 
         # Coalesced reload: many sync events -> at most ~1 reload per 700 ms.
@@ -124,7 +168,7 @@ class MainWindow(QMainWindow):
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(300)
-        self._search_timer.timeout.connect(self.reload_email_list)
+        self._search_timer.timeout.connect(self._run_search)
 
         self._sync_timer = QTimer(self)
         self._sync_timer.timeout.connect(self.start_sync)
@@ -151,6 +195,10 @@ class MainWindow(QMainWindow):
                 "Database check found issues - "
                 + "; ".join(report["problems"])
             )
+            self.toasts.show(
+                "Database check found issues",
+                "; ".join(report["problems"]), kind="error",
+            )
             return
         if report["problems"]:
             log.warning("Database check found issues: %s - repairing...",
@@ -159,6 +207,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 "Database check found issues - repaired: "
                 + "; ".join(report["repaired"])
+            )
+            self.toasts.show(
+                "Database repaired",
+                "; ".join(report["repaired"]), kind="warning",
             )
             self.reload_sidebar()
             self.reload_email_list()
@@ -289,9 +341,26 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ sidebar
 
     def reload_sidebar(self) -> None:
+        """Refresh the sidebar's counts/status without rebuilding the
+        account list widgets unless the account set itself changed.
+
+        This is called on every debounced sync-progress reload (roughly
+        every 700ms while any account is actively syncing), so rebuilding
+        every AccountItem from scratch each time - the previous behavior -
+        meant the entire sidebar tore down and recreated its widgets in a
+        loop for as long as sync ran. That's real, wasted UI-thread work
+        during exactly the window the app most needs to stay responsive,
+        and it reads to the user as "the sidebar keeps reloading/
+        re-downloading" even though no new sync was actually starting.
+        """
         counts = self.db.unread_counts()
         accounts = self.db.get_accounts()
-        self.sidebar.set_accounts(accounts, counts["per_account"])
+        account_ids = {a["id"] for a in accounts}
+        if account_ids != self._known_account_ids:
+            self.sidebar.set_accounts(accounts, counts["per_account"])
+            self._known_account_ids = account_ids
+        else:
+            self.sidebar.update_unread_counts(counts["per_account"])
         self.sidebar.set_inbox_count(counts["total"])
         self.sidebar.set_current(
             self.current_view if self.current_account_id is None else None,
@@ -366,21 +435,138 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- email list
 
-    def _schedule_reload(self) -> None:
+    def _schedule_reload(self, account_id: int | None = None) -> None:
+        """Coalesce reloads into at most one per 700ms. account_id, when
+        given, marks only that account as having new data - a debounced
+        tick then skips re-querying the email list if the view on screen
+        is scoped to a *different* single account, since nothing in it
+        could have changed. Omitting account_id (user actions: star/read/
+        delete, or the end-of-round all_finished signal) always refreshes,
+        matching the previous unconditional behavior for those paths.
+        """
+        if account_id is not None:
+            self._dirty_account_ids.add(account_id)
+        else:
+            self._dirty_reload_all = True
         if not self._reload_timer.isActive():
             self._reload_timer.start()
 
     def _do_scheduled_reload(self) -> None:
+        dirty_ids = self._dirty_account_ids
+        reload_all = self._dirty_reload_all
+        self._dirty_account_ids = set()
+        self._dirty_reload_all = False
         self.reload_sidebar()
-        self.reload_email_list()
+        # The Unified Mailbox view (current_account_id is None) can be
+        # affected by any account, so it always refreshes; a view scoped
+        # to one account only needs to when that account was the one with
+        # new data.
+        if reload_all or self.current_account_id is None or self.current_account_id in dirty_ids:
+            self.reload_email_list()
 
     def _on_search_changed(self, _text: str) -> None:
         self._extra_limit = 0
         self._search_timer.start()
 
-    def _load_more(self) -> None:
-        self._extra_limit += int(self.settings.get("messages_shown"))
+    def _run_search(self) -> None:
+        """Show local cache hits immediately, then - only if the query
+        looks deliberate - ask each provider to search its own server for
+        anything the cache never held. The visible list is never blocked
+        on the network; remote hits land later and refresh it."""
         self.reload_email_list()
+        query = self.toolbar.search_text()
+        # Very short fragments are almost always mid-typing, and a remote
+        # search per keystroke would be abusive to the provider.
+        if len(query) < _REMOTE_SEARCH_MIN_CHARS:
+            return
+        if query in self._remote_searched:
+            return  # already asked the providers for exactly this
+        self._remote_searched.add(query)
+        self._start_remote_search(query)
+
+    def _start_remote_search(self, query: str) -> None:
+        folder = "inbox" if self.current_view == "starred" else self.current_view
+        if folder not in ("inbox", "sent", "trash"):
+            return
+        accounts = self.db.get_accounts()
+        if self.current_account_id is not None:
+            accounts = [a for a in accounts if a["id"] == self.current_account_id]
+        if not accounts:
+            return
+        for account in accounts:
+            worker = RemoteSearchWorker(self.db.path, account, query, folder, parent=self)
+            worker.loaded.connect(
+                lambda aid, added, q=query: self._on_remote_search_done(q, added)
+            )
+            worker.failed.connect(
+                lambda aid, reason: log.info("Remote search unavailable: %s", reason)
+            )
+            worker.finished.connect(
+                lambda w=worker: w in self._search_workers
+                and self._search_workers.remove(w)
+            )
+            self._search_workers.append(worker)
+            worker.start()
+        self.statusBar().showMessage(f'Searching the server for "{query}"...')
+
+    def _on_remote_search_done(self, query: str, added: int) -> None:
+        # Ignore results for a query the user has already moved on from.
+        if self.toolbar.search_text() != query:
+            return
+        if added:
+            self.reload_email_list()
+
+    def _load_more(self) -> None:
+        """Show the next page. Served from cache when possible; only when
+        the cached rows run out does this reach the network for an older
+        batch (see OlderFetchWorker) - paging is never a download."""
+        page = int(self.settings.get("messages_shown"))
+        self._extra_limit += page
+        self.reload_email_list()
+
+        # Cache boundary: the list came back short of what was asked for,
+        # so there is nothing further cached to page into.
+        requested = page + self._extra_limit
+        if self.email_list.row_count() < requested:
+            self._fetch_older_messages()
+
+    def _fetch_older_messages(self) -> None:
+        folder = "inbox" if self.current_view == "starred" else self.current_view
+        if folder not in ("inbox", "sent", "trash"):
+            return
+        if self.current_account_id is not None:
+            accounts = [a for a in self.db.get_accounts()
+                        if a["id"] == self.current_account_id]
+        else:
+            accounts = self.db.get_accounts()
+
+        for account in accounts:
+            if account["id"] in self._older_fetch_ids:
+                continue  # one older-fetch per account at a time
+            self._older_fetch_ids.add(account["id"])
+            worker = OlderFetchWorker(self.db.path, account, folder, parent=self)
+            worker.loaded.connect(self._on_older_loaded)
+            worker.failed.connect(self._on_older_failed)
+            worker.finished.connect(
+                lambda w=worker, aid=account["id"]: (
+                    self._older_fetch_ids.discard(aid),
+                    w in self._older_workers and self._older_workers.remove(w),
+                )
+            )
+            self._older_workers.append(worker)
+            worker.start()
+        if self._older_fetch_ids:
+            self.statusBar().showMessage("Loading older messages...")
+
+    def _on_older_loaded(self, account_id: int, added: int) -> None:
+        if added:
+            self.reload_email_list()
+        elif not self._older_fetch_ids:
+            self.statusBar().showMessage("No older messages on the server")
+
+    def _on_older_failed(self, account_id: int, reason: str) -> None:
+        self.statusBar().showMessage(f"Could not load older messages: {reason}")
+        self.toasts.show("Could not load older messages", reason, kind="error")
 
     def reload_email_list(self) -> None:
         search = self.toolbar.search_text()
@@ -539,6 +725,7 @@ class MainWindow(QMainWindow):
             has_attachments=bool(msg["has_attachments"]),
             is_starred=bool(msg["is_starred"]),
         )
+        self.preview.set_attachments(_decode_attachments(msg))
 
         if msg["body_fetched"]:
             self._render_body(msg)
@@ -612,15 +799,17 @@ class MainWindow(QMainWindow):
         if not account:
             return
         worker = RemoteActionWorker(account, action, msg["uid"], msg["folder"], value)
-        worker.failed.connect(
-            lambda err: self.statusBar().showMessage(f"Server update failed: {err}")
-        )
+        worker.failed.connect(self._on_remote_action_failed)
         worker.finished.connect(
             lambda w=worker: w in self._action_workers
             and self._action_workers.remove(w)
         )
         self._action_workers.append(worker)
         worker.start()
+
+    def _on_remote_action_failed(self, err: str) -> None:
+        self.statusBar().showMessage(f"Server update failed: {err}")
+        self.toasts.show("Server update failed", err, kind="error")
 
     def _toggle_star(self) -> None:
         if self.current_email_id is None:
@@ -705,7 +894,7 @@ class MainWindow(QMainWindow):
             account = self.db.get_account(account_id)
             if account:
                 self._update_loading_state(account)
-        self._schedule_reload()
+        self._schedule_reload(account_id)
 
     def _on_sync_state_changed(self, account_id: int) -> None:
         self._update_account_status_display(account_id)
@@ -719,28 +908,33 @@ class MainWindow(QMainWindow):
         email = account["email"] if account else f"account {account_id}"
         if result.get("error"):
             self.statusBar().showMessage(f"Sync error - {email}: {result['error']}")
+            self.toasts.show(f"Sync error - {email}", result["error"], kind="error")
         elif result.get("cancelled"):
             pass
         elif result.get("failed"):
-            self.statusBar().showMessage(
-                f"Sync completed with issues - {email}: "
+            detail = (
                 f"{result['local_total']:,}/{result['server_total']:,} downloaded, "
                 f"{result['failed']:,} failed. Press Refresh to retry."
             )
+            self.statusBar().showMessage(f"Sync completed with issues - {email}: {detail}")
+            self.toasts.show(f"Sync completed with issues - {email}", detail, kind="warning")
         elif result.get("was_initial"):
             self.statusBar().showMessage(
                 f"Mailbox ready - {email}: "
                 f"{result['local_total']:,} messages verified in local cache"
             )
-        self._schedule_reload()
+        self._schedule_reload(account_id)
 
     def _on_all_finished(self, notify_count: int) -> None:
         self._schedule_reload()
         if notify_count:
             plural = "s" if notify_count != 1 else ""
-            self.statusBar().showMessage(
-                f"Sync complete - {notify_count} new message{plural}"
-            )
+            message = f"{notify_count} new message{plural}"
+            self.statusBar().showMessage(f"Sync complete - {message}")
+            if self.isActiveWindow():
+                # The window already has focus, so the tray balloon would go
+                # unseen - an in-app toast is the visible equivalent.
+                self.toasts.show("Sync complete", message, kind="success")
         self.notifier.notify_new_mail(notify_count)
 
     # ------------------------------------------------------------------ dialogs
@@ -806,6 +1000,10 @@ class MainWindow(QMainWindow):
             self._account_dialog.close()
         self.sync.shutdown()
         for worker in list(self._body_workers):
+            worker.wait(2000)
+        for worker in list(self._older_workers):
+            worker.wait(2000)
+        for worker in list(self._search_workers):
             worker.wait(2000)
         for worker in list(self._action_workers):
             worker.wait(1000)

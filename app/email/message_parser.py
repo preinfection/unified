@@ -6,9 +6,12 @@ import base64
 import email
 import email.header
 import email.utils
+import json
 import logging
 import re
 from email.message import Message
+
+from app.security import attachment_guard
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +70,48 @@ def resolve_cid_images(html: str, cid_map: dict[str, tuple[bytes, str]]) -> str:
         return f"{m.group(1)}data:{mime};base64,{b64}{m.group(3)}"
 
     return _CID_SRC.sub(_sub, html)
+
+
+def list_attachments(msg: Message) -> list[dict]:
+    """Metadata for each attachment part, with the attachment guard's
+    verdict already applied.
+
+    Only metadata - names, sizes, types, verdicts - is produced here;
+    payloads are never decoded to disk by parsing. The name recorded is
+    always the guard's sanitized form, so nothing downstream (UI, save
+    dialog, logs) ever handles the raw attacker-controlled string.
+    """
+    out: list[dict] = []
+    parts = msg.walk() if msg.is_multipart() else [msg]
+    for part in parts:
+        if part.get_content_maintype() == "multipart":
+            continue
+        disposition = str(part.get("Content-Disposition") or "")
+        raw_name = part.get_filename()
+        if not raw_name and "attachment" not in disposition.lower():
+            continue
+        # An inline image the HTML references by cid: is part of the body,
+        # not a user-facing attachment.
+        content_id = (part.get("Content-ID") or "").strip().strip("<>")
+        if content_id and "attachment" not in disposition.lower():
+            continue
+        try:
+            raw_name = decode_header_value(raw_name) if raw_name else ""
+        except Exception:
+            raw_name = ""
+        payload = part.get_payload(decode=True)
+        size = len(payload) if payload else 0
+        check = attachment_guard.check_attachment(
+            raw_name, part.get_content_type(), size,
+        )
+        out.append({
+            "name": check.safe_name,
+            "content_type": part.get_content_type(),
+            "size": size,
+            "verdict": check.verdict.value,
+            "reason": check.reason,
+        })
+    return out
 
 
 def extract_bodies(msg: Message) -> tuple[str, str, bool]:
@@ -128,6 +173,7 @@ def parse_rfc822(raw: bytes, account_id: int, folder: str, uid: str,
     """Parse full raw message bytes into the Database.upsert_email dict shape."""
     msg = email.message_from_bytes(raw)
     body_text, body_html, has_attachments = extract_bodies(msg)
+    attachments = list_attachments(msg)
 
     return {
         "account_id": account_id,
@@ -140,6 +186,7 @@ def parse_rfc822(raw: bytes, account_id: int, folder: str, uid: str,
         "is_read": 1 if is_read else 0,
         "is_starred": 1 if is_starred else 0,
         "has_attachments": 1 if has_attachments else 0,
+        "attachments": json.dumps(attachments) if attachments else "",
         "body_fetched": 1,
     }
 

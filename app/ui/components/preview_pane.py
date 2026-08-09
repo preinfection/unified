@@ -27,6 +27,25 @@ from app.ui.svg_icon import icon_set, simple_icon
 _AVATAR_SIZE = 42
 
 
+def _human_size(num_bytes: int) -> str:
+    if num_bytes <= 0:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if num_bytes < 1024 or unit == "GB":
+            return f"{num_bytes:.0f} {unit}" if unit == "B" else f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024.0
+    return ""
+
+
+def _format_attachment_label(att: dict) -> str:
+    name = att.get("name") or "attachment"
+    size = _human_size(int(att.get("size") or 0))
+    label = f"{name}  ({size})" if size else name
+    if att.get("verdict") == "block":
+        label += "  -  blocked"
+    return label
+
+
 class _HeaderAvatar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -182,11 +201,46 @@ class PreviewPane(QWidget):
         chip_row.addStretch(1)
         card_layout.addLayout(chip_row)
 
+        # Per-file attachment chips, each carrying the attachment guard's
+        # verdict. Replaces the generic "Has attachment" indicator when
+        # real per-file metadata is available.
+        self._attachment_list = QVBoxLayout()
+        self._attachment_list.setSpacing(t.SPACE_XS)
+        self._attachment_list.setContentsMargins(0, 0, 0, 0)
+        card_layout.addLayout(self._attachment_list)
+
         page_col.addWidget(card)
         t.apply_elevation(card, "sm")
 
+        # Privacy bar: remote images are withheld until asked for, so the
+        # user is told plainly rather than left wondering why a
+        # newsletter looks empty.
+        self._images_bar = QWidget()
+        self._images_bar.setObjectName("blockedImagesBar")
+        bar_row = QHBoxLayout(self._images_bar)
+        bar_row.setContentsMargins(t.SPACE_MD, t.SPACE_XS + 2, t.SPACE_SM, t.SPACE_XS + 2)
+        bar_row.setSpacing(t.SPACE_SM)
+        bar_icon = QLabel()
+        bar_icon.setPixmap(simple_icon("shield", 14, t.WARNING).pixmap(14, 14))
+        bar_row.addWidget(bar_icon)
+        self._images_label = QLabel("Remote images blocked to protect your privacy")
+        self._images_label.setFont(t.make_font("caption"))
+        self._images_label.setStyleSheet(f"color: {t.TEXT_SECONDARY};")
+        bar_row.addWidget(self._images_label, stretch=1)
+        self._show_images_btn = QPushButton("Show images")
+        self._show_images_btn.setObjectName("iconButton")
+        self._show_images_btn.setFont(t.make_font("caption"))
+        self._show_images_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._show_images_btn.clicked.connect(self._on_show_images)
+        bar_row.addWidget(self._show_images_btn)
+        self._images_bar.setVisible(False)
+        page_col.addWidget(self._images_bar)
+
         self.body = HtmlMailView()
+        self.body.setObjectName("emailBody")
+        self.body.remote_images_blocked.connect(self._on_remote_images_blocked)
         page_col.addWidget(self.body, stretch=1)
+        t.apply_elevation(self.body, "sm")
         self._stack.addWidget(message_page)
 
         self.set_starred(False)  # give the Star button its initial icon
@@ -210,6 +264,9 @@ class PreviewPane(QWidget):
         recipients: str, account_email: str, time_text: str,
         has_attachments: bool, is_starred: bool,
     ) -> None:
+        # New message: image consent starts fresh (see
+        # HtmlMailView.set_email_html), so the bar must start hidden too.
+        self._images_bar.setVisible(False)
         display_name = sender_name or sender_email or "(unknown sender)"
         self._sender_name.setText(display_name)
 
@@ -242,3 +299,75 @@ class PreviewPane(QWidget):
 
     def set_attachment_visible(self, visible: bool) -> None:
         self._attachment_chip.setVisible(visible)
+
+    # -------------------------------------------------------- attachments
+
+    def set_attachments(self, attachments: list[dict]) -> None:
+        """Render one chip per attachment, coloured by the guard's verdict.
+
+        A blocked attachment is shown with its reason rather than hidden -
+        silently dropping it would leave the user wondering where the file
+        went, and the name shown is always the guard's sanitized form.
+        """
+        while self._attachment_list.count():
+            item = self._attachment_list.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+        if not attachments:
+            return
+        # Per-file chips supersede the generic indicator.
+        self._attachment_chip.setVisible(False)
+
+        for att in attachments:
+            verdict = att.get("verdict", "allow")
+            blocked = verdict == "block"
+            warn = verdict == "warn"
+            color = t.ERROR if blocked else (t.WARNING if warn else t.TEXT_SECONDARY)
+            icon_name = "warning" if (blocked or warn) else "attachment"
+
+            chip = QWidget()
+            chip.setObjectName("attachmentChip")
+            row = QHBoxLayout(chip)
+            row.setContentsMargins(t.SPACE_SM + 2, t.SPACE_XS, t.SPACE_MD, t.SPACE_XS)
+            row.setSpacing(t.SPACE_XS + 2)
+
+            icon = QLabel()
+            icon.setPixmap(simple_icon(icon_name, t.ICON_SIZE_ROW, color)
+                           .pixmap(t.ICON_SIZE_ROW, t.ICON_SIZE_ROW))
+            row.addWidget(icon)
+
+            label = QLabel(_format_attachment_label(att))
+            label.setFont(t.make_font("caption"))
+            label.setStyleSheet(f"color: {color};")
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            row.addWidget(label)
+
+            reason = att.get("reason") or ""
+            if reason:
+                chip.setToolTip(
+                    ("Blocked: " if blocked else "Caution: ") + reason
+                )
+            row.addStretch(1)
+
+            wrapper = QHBoxLayout()
+            wrapper.addWidget(chip)
+            wrapper.addStretch(1)
+            holder = QWidget()
+            holder.setLayout(wrapper)
+            self._attachment_list.addWidget(holder)
+
+    # ------------------------------------------------------ remote images
+
+    def _on_remote_images_blocked(self, count: int) -> None:
+        plural = "s" if count != 1 else ""
+        self._images_label.setText(
+            f"{count} remote image{plural} blocked to protect your privacy"
+        )
+        self._images_bar.setVisible(True)
+
+    def _on_show_images(self) -> None:
+        self.body.set_remote_images_allowed(True)
+        self._images_bar.setVisible(False)

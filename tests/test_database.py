@@ -81,6 +81,33 @@ def test_search(db):
     assert hits[0]["subject"] == "Quarterly report"
 
 
+def test_search_reaches_messages_outside_the_display_limit(db):
+    """The message list's display limit (default 100, raised by "Load
+    more") must never become a search limit too - a search has to see
+    every locally cached row, not just the newest N that happen to be on
+    screen. Seed 150 messages where the only match is the OLDEST one (so
+    it's excluded from a limit=100 newest-first query), and confirm
+    search still finds it with that same limit.
+    """
+    account_id = db.add_account("a@example.com", "gmail")
+    for i in range(150):
+        is_target = i == 149
+        db.upsert_email(make_msg(
+            account_id, uid=str(i),
+            subject="Your invoice from Amazon" if is_target else f"Newsletter #{i}",
+            date_ts=2_000_000_000 - i,  # i=0 newest ... i=149 oldest
+        ))
+
+    default_view = db.list_emails("inbox", limit=100)
+    assert len(default_view) == 100
+    assert not any(e["uid"] == "149" for e in default_view)
+
+    hits = db.list_emails("inbox", search="invoice from amazon", limit=100)
+    assert len(hits) == 1
+    assert hits[0]["uid"] == "149"
+    assert db.count_emails("inbox", search="invoice from amazon") == 1
+
+
 def test_unread_counts_and_mark_read(db):
     account_id = db.add_account("a@example.com", "gmail")
     db.upsert_email(make_msg(account_id, uid="1"))

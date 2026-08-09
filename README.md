@@ -7,12 +7,14 @@ Built with Python, PySide6, and SQLite, Unified focuses on a modern desktop expe
 ## Features
 
 * Multiple Gmail and IMAP accounts in one inbox
-* Fast local email search
+* Fast local search, with server-side search for older mail
 * Offline access to cached messages
 * Modern native Windows desktop interface
 * Encrypted local email cache
-* Background syncing with progress tracking
+* Background syncing that never blocks the interface
 * Secure credential storage
+* Remote images blocked by default, with per-message consent
+* Link and attachment safety checks on untrusted mail
 
 ## Preview
 
@@ -72,9 +74,10 @@ This launches Unified directly from the source code.
 
 Available actions:
 
-* Search across your entire local mailbox cache
+* Search your local mailbox cache, and the mail server for older messages
 * Star, mark read, and manage messages
 * Compose plain-text emails
+* Load older messages on demand with **Load more**
 * Monitor sync progress and errors from the console
 
 ## How it works
@@ -90,6 +93,24 @@ Accounts sync in the background:
 
 The application remains usable while synchronization is running.
 
+### Downloading vs. displaying
+
+Unified deliberately does not mirror your entire mailbox. A routine sync
+caches roughly the **newest 200 messages per account, per folder**, and
+the message list shows the **newest 100** of them at a time.
+
+* **Load more** pages through what is already cached - no network request.
+* Once you page past the cached messages, an older batch is fetched in
+  the background. Messages already cached are never downloaded twice.
+* **Search** looks through the whole local cache first. If what you are
+  looking for was never cached, Unified asks the provider to search
+  server-side (Gmail's own query syntax, or IMAP `SEARCH`) and caches
+  only the matches.
+
+This is what keeps a 25,000-message account from costing tens of
+thousands of downloads on first run, while still letting you reach old
+mail on demand.
+
 ## Security
 
 * Gmail authentication uses OAuth2; no Google password ever reaches the app.
@@ -104,6 +125,30 @@ The application remains usable while synchronization is running.
   [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full threat model -
   stated plainly, including what this does *not* protect against.
 * Logs do not contain passwords, tokens, or private message content.
+
+### Protections against hostile mail
+
+* **Links are checked before they are opened.** Only `http`, `https` and
+  `mailto` links are handed to Windows. A message cannot use a `file:`
+  link to launch a local program, or a UNC path to leak your Windows
+  credentials to a remote server.
+* **Remote images are blocked until you ask for them,** per message.
+  Loading them automatically would turn every tracking pixel into a read
+  receipt and let a sender probe machines only your computer can reach.
+  The reading pane tells you what was withheld and offers to load it.
+* **Email HTML cannot run code.** The reader has no JavaScript engine at
+  all, so scripts and event handlers in a message are inert.
+* **Attachments are checked before you ever see them.** Filenames are
+  stripped of directory paths, traversal, control characters and
+  right-to-left disguises; executables, scripts and disguised double
+  extensions (`invoice.pdf.exe`) are refused; archives and macro-enabled
+  documents are flagged. Nothing is ever opened, extracted or executed
+  automatically.
+
+**This is hardening, not antivirus.** Unified does no signature scanning
+or content analysis, and does not replace Windows Defender - which
+already scans files written to disk. A malicious PDF is still a malicious
+PDF; these checks stop filename and file-type attacks, not payloads.
 
 **What this is not:** Unified is not end-to-end encrypted mail. Gmail
 and IMAP are standard protocols - your mail provider can read message
@@ -130,9 +175,12 @@ anywhere in the app.
 
 * Windows only
 * Google OAuth requires your own `credentials.json`
-* Attachments are detected but not downloadable yet
+* Attachments are listed and safety-checked, but cannot be saved yet
 * Email composition currently supports plain text only
 * Per-account views are currently inbox-focused
+* HTML email is rendered by Qt's rich-text engine, which has no support
+  for CSS float, flexbox or grid - very complex responsive layouts fall
+  back to a simpler stacked appearance
 
 ## Project structure
 

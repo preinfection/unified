@@ -83,6 +83,7 @@ class ConsoleWidget(QWidget):
         self._filter_group.setExclusive(True)
         for name in FILTERS:
             btn = QPushButton(name.title() if name != "ALL" else "All")
+            btn.setObjectName("consoleFilter")
             btn.setCheckable(True)
             btn.setChecked(name == "ALL")
             btn.clicked.connect(lambda _=False, n=name: self._set_filter(n))
@@ -94,11 +95,13 @@ class ConsoleWidget(QWidget):
         self.autoscroll_check.setChecked(True)
         controls.addWidget(self.autoscroll_check)
 
-        copy_btn = QPushButton("Copy")
+        copy_btn = QPushButton("  Copy")
+        copy_btn.setObjectName("iconButton")
         copy_btn.clicked.connect(self._copy)
         controls.addWidget(copy_btn)
 
-        clear_btn = QPushButton("Clear")
+        clear_btn = QPushButton("  Clear")
+        clear_btn.setObjectName("iconButton")
         clear_btn.clicked.connect(self._clear)
         controls.addWidget(clear_btn)
 
