@@ -35,6 +35,7 @@ class ListHeader(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("listHeader")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(t.LIST_HEADER_HEIGHT + t.SPACE_MD)
 
         row = QHBoxLayout(self)
@@ -66,7 +67,8 @@ class ListHeader(QWidget):
         row.addWidget(self.more_button)
 
     def set_scope(self, title: str, account_email: str | None = None) -> None:
-        self._title.setText(title if not account_email else f"{title}")
+        """Name the mailbox, and the account filter when one is applied -
+        so "Inbox, this account only" can never be mistaken for "Inbox"."""
         self._account = account_email
         self._refresh_title(title, account_email)
 

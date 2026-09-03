@@ -27,37 +27,45 @@ class StartupWindow(QWidget):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(make_app_icon())
-        self.setFixedSize(340, 220)
+        self.setFixedSize(380, 260)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        # A bare top-level QWidget isn't covered by style.py's QMainWindow/
-        # QDialog background rule, so it gets its own explicit background
-        # rather than risk showing through as opaque black.
-        self.setStyleSheet(f"background: {t.BG_APP};")
+        # A bare top-level QWidget is not covered by the stylesheet's
+        # QMainWindow/QDialog background rule, so it names its surface
+        # explicitly rather than risk painting as opaque black.
+        self.setObjectName("appRoot")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(f"QWidget#appRoot {{ background: {t.BG_CANVAS}; }}")
         apply_dark_titlebar(self)
 
         col = QVBoxLayout(self)
-        col.setContentsMargins(t.SPACE_XL, t.SPACE_XL, t.SPACE_XL, t.SPACE_XL)
+        col.setContentsMargins(t.SPACE_4XL, t.SPACE_4XL, t.SPACE_4XL, t.SPACE_4XL)
+        col.setSpacing(0)
         col.addStretch(1)
 
         icon_label = QLabel()
-        icon_label.setPixmap(make_mark(44, t.TEXT_PRIMARY))
+        icon_label.setPixmap(make_mark(40, t.TEXT_PRIMARY))
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(icon_label)
-        col.addSpacing(t.SPACE_MD)
+        col.addSpacing(t.SPACE_XL)
 
         title = QLabel(APP_NAME)
-        title.setFont(t.make_font("app_title"))
-        title.setStyleSheet(f"color: {t.TEXT_PRIMARY};")
+        title.setFont(t.make_font("title"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(title)
-        col.addSpacing(t.SPACE_LG)
+
+        subtitle = QLabel("Your accounts, one mailbox")
+        subtitle.setFont(t.make_font("body_sm"))
+        subtitle.setProperty("tone", "tertiary")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(subtitle)
+        col.addSpacing(t.SPACE_4XL)
 
         self._stage_label = QLabel("Starting Unified...")
-        self._stage_label.setFont(t.make_font("body"))
-        self._stage_label.setStyleSheet(f"color: {t.TEXT_SECONDARY};")
+        self._stage_label.setFont(t.make_font("body_sm"))
+        self._stage_label.setProperty("tone", "secondary")
         self._stage_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(self._stage_label)
-        col.addSpacing(t.SPACE_SM)
+        col.addSpacing(t.SPACE_LG)
 
         self._bar = QProgressBar()
         # Indeterminate, not a fake countdown: these startup steps (file
@@ -67,9 +75,12 @@ class StartupWindow(QWidget):
         # already uses when a sync phase has no total yet.
         self._bar.setRange(0, 0)
         self._bar.setTextVisible(False)
-        self._bar.setFixedWidth(240)
+        self._bar.setFixedWidth(200)
         col.addWidget(self._bar, alignment=Qt.AlignmentFlag.AlignHCenter)
         col.addStretch(1)
+
+    def apply_theme(self) -> None:
+        self.setStyleSheet(f"QWidget#appRoot {{ background: {t.BG_CANVAS}; }}")
 
     def set_stage(self, text: str) -> None:
         self._stage_label.setText(text)

@@ -30,7 +30,8 @@ from __future__ import annotations
 import logging
 import shutil
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -47,7 +48,7 @@ from PySide6.QtWidgets import (
 from app import APP_NAME, __version__, config
 from app.services.account_manager import AccountManager
 from app.ui import theme as t
-from app.ui.components.buttons import AccentButton, Button, DangerButton
+from app.ui.components.buttons import AccentButton, Button
 from app.ui.components.dialog import AppDialog, confirm, divider, notify, report_error
 from app.ui.components.dropdown import Dropdown
 from app.ui.components.section_header import SectionHeader
@@ -55,6 +56,18 @@ from app.ui.components.toggle import Toggle
 from app.ui.svg_icon import themed_pixmap
 
 log = logging.getLogger(__name__)
+
+
+def _avatar_pixmap(email: str) -> QPixmap:
+    from app.ui.components.avatar import paint_avatar
+
+    size = t.AVATAR_SM
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    paint_avatar(painter, QRectF(0, 0, size, size), email, "", email)
+    painter.end()
+    return pixmap
 
 
 def _panel(*rows: QWidget) -> QWidget:
@@ -266,14 +279,15 @@ class SettingsDialog(AppDialog):
         self.account_list = QListWidget()
         self.account_list.setFrameShape(QListWidget.Shape.NoFrame)
         self.account_list.setMinimumHeight(200)
+        self.account_list.setIconSize(QSize(t.AVATAR_SM, t.AVATAR_SM))
         self.account_list.setAccessibleName("Connected accounts")
         self._reload_accounts()
         column.addWidget(self.account_list, stretch=1)
 
         actions = QHBoxLayout()
         actions.setSpacing(t.SPACE_MD)
-        self.remove_btn = DangerButton(
-            "Remove account", icon="trash",
+        self.remove_btn = Button(
+            "Remove account", variant="danger_quiet", icon="trash",
             tooltip="Disconnect this account and delete its cached mail",
         )
         self.remove_btn.clicked.connect(self._remove_selected)
@@ -380,12 +394,17 @@ class SettingsDialog(AppDialog):
         )
 
     def _reload_accounts(self) -> None:
+        """One row per account: its own avatar (the same color it has in
+        the sidebar and the message list), the address, and the provider -
+        so the row is recognisable rather than a line of text."""
         self.account_list.clear()
         accounts = self.manager.db.get_accounts()
         for account in accounts:
             provider = "Gmail" if account["provider"] == "gmail" else "IMAP"
-            item = QListWidgetItem(f"{account['email']}    ·    {provider}")
+            item = QListWidgetItem(f"{account['email']}      {provider}")
+            item.setIcon(QIcon(_avatar_pixmap(account["email"])))
             item.setData(Qt.ItemDataRole.UserRole, account["id"])
+            item.setToolTip(account["email"])
             self.account_list.addItem(item)
         if not accounts:
             placeholder = QListWidgetItem("No accounts connected yet")

@@ -23,17 +23,30 @@ class Toggle(QCheckBox):
         super().__init__(parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(_WIDTH, _HEIGHT)
+        # Tells the stylesheet not to draw a checkbox indicator over the
+        # track this widget paints for itself.
+        self.setProperty("role", "switch")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._knob_pos = 1.0 if self.isChecked() else 0.0
 
         self._anim = QPropertyAnimation(self, b"knobPos", self)
-        self._anim.setDuration(t.DURATION_BASE)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.toggled.connect(self._animate_to)
 
     def _animate_to(self, checked: bool) -> None:
+        target = 1.0 if checked else 0.0
+        duration = t.duration(t.DURATION_BASE)
+        if not duration:
+            # Reduced motion: the state still changes, it just does not
+            # travel. Asking the theme manager here means the preference
+            # is honored in one place rather than re-checked per widget.
+            self._anim.stop()
+            self._set_knob_pos(target)
+            return
         self._anim.stop()
+        self._anim.setDuration(duration)
         self._anim.setStartValue(self._knob_pos)
-        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.setEndValue(target)
         self._anim.start()
 
     def _get_knob_pos(self) -> float:

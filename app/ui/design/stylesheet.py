@@ -131,6 +131,30 @@ QPushButton[variant="danger"] {
 }
 QPushButton[variant="danger"]:hover { background: $danger_fg; border-color: $danger_fg; }
 QPushButton[variant="danger"]:pressed { background: $danger_strong; }
+QPushButton[variant="danger"]:disabled {
+    background: $surface_active;
+    color: $text_disabled;
+    border-color: $border;
+}
+
+/* A destructive action that is not the point of the screen. On a
+   settings page a solid red button out-shouts Save, which is the button
+   the user is actually there to press. */
+QPushButton[variant="danger_quiet"] {
+    background: transparent;
+    color: $danger_fg;
+    border: ${stroke_thin}px solid $border_strong;
+}
+QPushButton[variant="danger_quiet"]:hover {
+    background: $danger_bg;
+    border-color: $danger_fg;
+}
+QPushButton[variant="danger_quiet"]:pressed { background: $danger_bg; }
+QPushButton[variant="danger_quiet"]:disabled {
+    color: $text_disabled;
+    border-color: $border;
+    background: transparent;
+}
 
 QPushButton[variant="subtle"], QToolButton[variant="subtle"] {
     background: transparent;
@@ -167,6 +191,7 @@ QPushButton[variant="link"] {
 }
 QPushButton[variant="link"]:hover { color: $accent_hover; text-decoration: underline; }
 QPushButton[variant="link"]:focus { border-color: $focus_ring; }
+QPushButton[variant="link"]:disabled { color: $text_disabled; }
 
 /* Icon-only actions: square, no label, no padding asymmetry. */
 QPushButton[shape="icon"], QToolButton[shape="icon"] {
@@ -279,7 +304,28 @@ QLineEdit[shape="pill"]:focus { padding: 0 ${space_md}px; }
 QLineEdit[surface="raised"] { background: $surface_hover; border-color: transparent; }
 QLineEdit[surface="raised"]:hover { border-color: $border; }
 
-QSpinBox::up-button, QSpinBox::down-button { width: 0; border: none; }
+/* Real, styled steppers. Hiding them entirely (width: 0) leaves a
+   number field that can only be changed by typing, which is a usability
+   regression dressed up as minimalism. */
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: ${space_2xl}px;
+    border: none;
+    border-left: ${stroke_thin}px solid $border;
+    background: transparent;
+}
+QSpinBox::up-button { subcontrol-position: top right; border-bottom: none; }
+QSpinBox::down-button { subcontrol-position: bottom right; }
+QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: $surface_hover; }
+QSpinBox::up-button:pressed, QSpinBox::down-button:pressed { background: $surface_active; }
+QSpinBox::up-arrow {
+    image: url($chevron_up_asset);
+    width: ${icon_xs}px; height: ${icon_xs}px;
+}
+QSpinBox::down-arrow {
+    image: url($chevron_asset);
+    width: ${icon_xs}px; height: ${icon_xs}px;
+}
 QComboBox::drop-down { border: none; width: ${space_3xl}px; background: transparent; }
 QComboBox::down-arrow {
     image: url($chevron_asset);
@@ -446,6 +492,11 @@ QWidget[role="card"] {
     border: ${stroke_thin}px solid $border;
     border-radius: ${radius_lg}px;
 }
+QWidget[role="card"]:hover { border-color: $border_strong; }
+QWidget[role="card"][state="selected"] {
+    background: $accent_subtle;
+    border-color: $accent;
+}
 QWidget[role="panel"], QWidget#settingsPanel {
     background: $surface;
     border: ${stroke_thin}px solid $border;
@@ -546,6 +597,11 @@ QProgressBar {
 QProgressBar::chunk { background: $accent; border-radius: 2px; }
 
 QCheckBox, QRadioButton { background: transparent; spacing: ${space_md}px; }
+/* The switch paints its own track and knob; without this Qt draws a
+   checkbox indicator on top of it. */
+QCheckBox[role="switch"]::indicator {
+    width: 0; height: 0; border: none; background: transparent; image: none;
+}
 QCheckBox::indicator, QRadioButton::indicator {
     width: ${icon_md}px; height: ${icon_md}px;
     border: ${stroke_thin}px solid $border_strong;
@@ -659,6 +715,7 @@ def _asset_variables(palette: Palette) -> dict[str, str]:
 
     return {
         "chevron_asset": theme_asset_url("chevron_down", 12, palette.text_secondary),
+        "chevron_up_asset": theme_asset_url("chevron_up", 12, palette.text_secondary),
         "check_asset": theme_asset_url("check", 12, palette.text_on_accent),
     }
 

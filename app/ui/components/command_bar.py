@@ -55,6 +55,7 @@ class CommandBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("commandBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(t.COMMAND_BAR_HEIGHT)
 
         row = QHBoxLayout(self)

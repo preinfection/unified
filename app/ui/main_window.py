@@ -280,6 +280,7 @@ class MainWindow(QMainWindow):
         self.panes = QSplitter(Qt.Orientation.Horizontal)
         self.panes.setChildrenCollapsible(False)
         self.panes.setHandleWidth(1)
+        self.panes.setAccessibleName("Mailbox")
         self.panes.addWidget(self.sidebar)
         self.panes.addWidget(self._build_list_pane())
         self.panes.addWidget(self._build_reader_pane())
@@ -304,10 +305,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._vertical_splitter, stretch=1)
 
         self.setCentralWidget(root)
+        # Tab order follows the reading order of the window rather than
+        # the order the widgets happened to be constructed in.
+        self.setTabOrder(self.toolbar.search_edit, self.sidebar)
+        self.setTabOrder(self.sidebar, self.email_list)
+        self.setTabOrder(self.email_list, self.preview)
 
     def _build_list_pane(self) -> QWidget:
         pane = QWidget()
         pane.setObjectName("listPane")
+        pane.setAccessibleName("Message list")
         pane.setMinimumWidth(t.LIST_WIDTH_MIN)
         column = QVBoxLayout(pane)
         column.setContentsMargins(0, 0, 0, 0)
@@ -354,6 +361,7 @@ class MainWindow(QMainWindow):
 
     def _build_reader_pane(self) -> QWidget:
         self.preview = ReaderPane()
+        self.preview.setAccessibleName("Reading pane")
         self.preview.star_clicked.connect(self._toggle_star)
         self.preview.delete_clicked.connect(self._delete_current)
         self.preview.reply_clicked.connect(lambda: self._open_reply(all_recipients=False))
@@ -374,8 +382,13 @@ class MainWindow(QMainWindow):
         bar.addPermanentWidget(self._sync_label)
 
     def _set_status(self, text: str) -> None:
+        """One status line, in one widget.
+
+        QStatusBar.showMessage() paints a temporary message *over* the
+        permanent widgets rather than replacing them, so using both means
+        two strings drawn on top of each other in the corner.
+        """
         self._status_label.setText(text)
-        self.statusBar().showMessage(text)
 
     # ------------------------------------------------------------ shortcuts
 

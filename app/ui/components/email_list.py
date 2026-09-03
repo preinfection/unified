@@ -178,10 +178,67 @@ class EmailListModel(QAbstractListModel):
         return QModelIndex()
 
 
+class _RowFonts:
+    """The row fonts and their metrics, built once and shared.
+
+    A delegate paints every visible row on every repaint, and a scrolling
+    list repaints constantly - constructing five QFonts and three
+    QFontMetrics per row per frame is real, avoidable work on the UI
+    thread. They change only when the theme or the density does, so this
+    rebuilds on those signals instead.
+
+    Deliberately module-level rather than per-delegate: the theme manager
+    is a singleton that outlives any particular view, and a signal still
+    connected to a delegate whose C++ object has been deleted is a crash
+    waiting for the next theme change.
+    """
+
+    ROLES = (
+        "sender", "sender_read", "subject", "subject_read",
+        "preview", "timestamp", "overline",
+    )
+
+    def __init__(self) -> None:
+        # Built on first use, not at import: this module is imported from
+        # app.main before QApplication exists, and a QFont constructed
+        # before there is a QGuiApplication is undefined behavior.
+        self._fonts: dict = {}
+        self._metrics: dict = {}
+
+    def rebuild(self) -> None:
+        self._fonts = {role: t.make_font(role) for role in self.ROLES}
+        self._metrics = {
+            role: QFontMetrics(font) for role, font in self._fonts.items()
+        }
+
+    def font(self, role: str):
+        if not self._fonts:
+            self.rebuild()
+        return self._fonts[role]
+
+    def metrics(self, role: str) -> QFontMetrics:
+        if not self._metrics:
+            self.rebuild()
+        return self._metrics[role]
+
+
+ROW_FONTS = _RowFonts()
+t.theme_manager.changed.connect(ROW_FONTS.rebuild)
+t.theme_manager.density_changed.connect(ROW_FONTS.rebuild)
+
+
 class EmailRowDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.show_account = False
+
+    @staticmethod
+    def font_for(role: str):
+        return ROW_FONTS.font(role)
+
+    @staticmethod
+    def metrics_for(role: str) -> QFontMetrics:
+        return ROW_FONTS.metrics(role)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem,
               index: QModelIndex) -> None:
@@ -202,8 +259,8 @@ class EmailRowDelegate(QStyledItemDelegate):
     def _paint_header(self, painter: QPainter, option: QStyleOptionViewItem,
                       label: str) -> None:
         rect = option.rect
-        font = t.make_font("overline")
-        metrics = QFontMetrics(font)
+        font = self.font_for("overline")
+        metrics = self.metrics_for("overline")
         painter.setFont(font)
         painter.setPen(t.qcolor(t.TEXT_TERTIARY))
         text = label.upper()
@@ -277,10 +334,11 @@ class EmailRowDelegate(QStyledItemDelegate):
             return  # pane too narrow to render anything honestly
 
         # -- line 1: sender, then timestamp hard-right
-        name_font = t.make_font("sender" if unread else "sender_read")
-        name_metrics = QFontMetrics(name_font)
-        time_font = t.make_font("timestamp")
-        time_metrics = QFontMetrics(time_font)
+        name_role = "sender" if unread else "sender_read"
+        name_font = self.font_for(name_role)
+        name_metrics = self.metrics_for(name_role)
+        time_font = self.font_for("timestamp")
+        time_metrics = self.metrics_for("timestamp")
         time_text = format_time(msg["date_ts"])
         time_width = time_metrics.horizontalAdvance(time_text)
 
@@ -307,8 +365,9 @@ class EmailRowDelegate(QStyledItemDelegate):
         )
 
         # -- line 2: subject, with star/attachment pinned right
-        subject_font = t.make_font("subject" if unread else "subject_read")
-        subject_metrics = QFontMetrics(subject_font)
+        subject_role = "subject" if unread else "subject_read"
+        subject_font = self.font_for(subject_role)
+        subject_metrics = self.metrics_for(subject_role)
         subject_top = top + line_h
         icons_width = 0.0
         icon_x = text_right
@@ -344,8 +403,8 @@ class EmailRowDelegate(QStyledItemDelegate):
             return
 
         # -- line 3: preview, with the receiving account when it matters
-        preview_font = t.make_font("preview")
-        preview_metrics = QFontMetrics(preview_font)
+        preview_font = self.font_for("preview")
+        preview_metrics = self.metrics_for("preview")
         preview_top = subject_top + subject_metrics.height()
         account_width = 0.0
         if self.show_account and msg.get("account_email"):

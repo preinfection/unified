@@ -7,7 +7,7 @@ platform behavior - all of which have to be reimplemented badly. So every
 button here *is* a `QPushButton`; what changes is a dynamic property the
 stylesheet selects on:
 
-    variant : primary | secondary | subtle | danger | link
+    variant : primary | secondary | subtle | danger | danger_quiet | link
     size    : sm | md | lg
     shape   : icon        (square, label-less)
 
@@ -32,6 +32,7 @@ VARIANT_PRIMARY = "primary"
 VARIANT_SECONDARY = "secondary"
 VARIANT_SUBTLE = "subtle"
 VARIANT_DANGER = "danger"
+VARIANT_DANGER_QUIET = "danger_quiet"
 VARIANT_LINK = "link"
 
 _ICON_ROLE_FOR_VARIANT = {
@@ -39,6 +40,7 @@ _ICON_ROLE_FOR_VARIANT = {
     VARIANT_SECONDARY: "default",
     VARIANT_SUBTLE: "default",
     VARIANT_DANGER: "on_accent",
+    VARIANT_DANGER_QUIET: "danger",
     VARIANT_LINK: "accent",
 }
 

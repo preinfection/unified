@@ -19,13 +19,14 @@ import logging
 import sys
 
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from app import APP_NAME, __version__, config, logging_setup
 from app.database import Database
 from app.migration import migrate_legacy_install
 from app.security import crypto_store
 from app.ui.components import focus as focus_ring
+from app.ui.components.dialog import notify, report_error
 from app.ui.design.theme import theme_manager
 from app.ui.main_window import MainWindow
 from app.ui.startup_window import StartupWindow
@@ -101,27 +102,29 @@ def main() -> int:
         startup.close()
 
         if unlock_error:
-            QMessageBox.warning(
+            notify(
                 window,
-                "Encrypted mailbox could not be unlocked",
-                "Your local mailbox is encrypted and could not be unlocked on "
-                "this machine or user account "
-                f"({unlock_error}).\n\n"
-                "The encrypted file was preserved rather than overwritten. "
-                "Unified will start with an empty local cache - remove and "
-                "re-add your accounts to rebuild it, or restore the original "
-                "key.bin from a backup of this machine to try again.",
+                "Your encrypted mailbox could not be unlocked",
+                "The local mailbox is encrypted to this machine and user "
+                "account, and could not be opened here. Nothing was deleted - "
+                "the encrypted file was kept exactly as it was. Unified will "
+                "start with an empty local cache; re-add your accounts to "
+                "rebuild it, or restore key.bin from a backup of this machine.",
+                detail=str(unlock_error),
             )
         elif recovered:
-            window.statusBar().showMessage(
-                "Recovered mailbox after an interrupted session - no data lost"
+            window._set_status(
+                "Recovered your mailbox after an interrupted session - "
+                "nothing was lost"
             )
 
     def on_failed(message: str) -> None:
         startup.close()
-        QMessageBox.critical(
+        report_error(
             None, f"{APP_NAME} could not start",
-            f"Something went wrong while starting {APP_NAME}:\n\n{message}",
+            "Something went wrong before the mailbox could be opened. Your "
+            "mail and accounts have not been changed.",
+            detail=message,
         )
         app.quit()
 

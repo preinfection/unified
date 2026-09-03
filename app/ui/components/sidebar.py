@@ -63,6 +63,7 @@ class SidebarWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(t.SIDEBAR_WIDTH)
         self.setAccessibleName("Mailbox navigation")
 

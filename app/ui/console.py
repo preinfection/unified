@@ -18,11 +18,15 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QHBoxLayout,
+    QLabel,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
+
+from app.ui import theme as t
+from app.ui.components.buttons import Button
 
 MAX_RECORDS = 3000
 
@@ -74,16 +78,26 @@ class ConsoleWidget(QWidget):
         self._filter = "ALL"
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 0)
-        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         controls = QHBoxLayout()
-        controls.setSpacing(4)
+        controls.setContentsMargins(
+            t.SPACE_LG, t.SPACE_MD, t.SPACE_LG, t.SPACE_MD
+        )
+        controls.setSpacing(t.SPACE_SM)
+
+        heading = QLabel("Console")
+        heading.setProperty("role", "overline")
+        heading.setFont(t.make_font("overline"))
+        controls.addWidget(heading)
+        controls.addSpacing(t.SPACE_MD)
         self._filter_group = QButtonGroup(self)
         self._filter_group.setExclusive(True)
         for name in FILTERS:
             btn = QPushButton(name.title() if name != "ALL" else "All")
             btn.setObjectName("consoleFilter")
+            btn.setFont(t.make_font("caption_strong"))
             btn.setCheckable(True)
             btn.setChecked(name == "ALL")
             btn.clicked.connect(lambda _=False, n=name: self._set_filter(n))
@@ -93,15 +107,16 @@ class ConsoleWidget(QWidget):
 
         self.autoscroll_check = QCheckBox("Auto-scroll")
         self.autoscroll_check.setChecked(True)
+        self.autoscroll_check.setFont(t.make_font("caption"))
         controls.addWidget(self.autoscroll_check)
 
-        copy_btn = QPushButton("  Copy")
-        copy_btn.setObjectName("iconButton")
+        copy_btn = Button("Copy", variant="subtle", size="sm", icon="download",
+                          tooltip="Copy the visible log to the clipboard")
         copy_btn.clicked.connect(self._copy)
         controls.addWidget(copy_btn)
 
-        clear_btn = QPushButton("  Clear")
-        clear_btn.setObjectName("iconButton")
+        clear_btn = Button("Clear", variant="subtle", size="sm", icon="close",
+                           tooltip="Clear the console")
         clear_btn.clicked.connect(self._clear)
         controls.addWidget(clear_btn)
 
