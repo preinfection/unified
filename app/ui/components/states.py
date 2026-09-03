@@ -20,7 +20,7 @@ layout from jumping when they do and reads as "loading" without a word.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from app.ui import theme as t
 from app.ui.components.buttons import Button, PrimaryButton
+from app.ui.design import motion
 from app.ui.svg_icon import themed_pixmap
 
 _ICON_SIZE = 28
@@ -268,7 +269,7 @@ class SkeletonList(QWidget):
         self._phase = 0.0
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._timer = QTimer(self)
-        self._timer.setInterval(40)
+        self._timer.setInterval(33)
         self._timer.timeout.connect(self._tick)
 
     def start(self) -> None:
@@ -287,21 +288,18 @@ class SkeletonList(QWidget):
         super().showEvent(event)
 
     def _tick(self) -> None:
-        self._phase = (self._phase + 0.03) % 1.0
+        # One sweep per shimmer cycle, linear - a highlight travelling
+        # across the placeholders, not the whole block throbbing.
+        self._phase = (self._phase + 33 / motion.SHIMMER_CYCLE) % 1.0
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        import math
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
 
         base = QColor(t.BORDER)
-        pulse = 0.5 + 0.5 * math.sin(self._phase * 2 * math.pi)
-        alpha = int(120 + 70 * (pulse if self._timer.isActive() else 0.5))
-        base.setAlpha(alpha)
-
+        base.setAlpha(150)
         row_height = t.row_height()
         avatar = t.AVATAR_MD
         y = t.SPACE_XS
@@ -320,4 +318,25 @@ class SkeletonList(QWidget):
                 t.RADIUS_XS, t.RADIUS_XS,
             )
             y += row_height
+
+        # The travelling highlight band. Drawn over the placeholders and
+        # clipped to them, so it reads as light moving across the shapes
+        # rather than as a stripe across the pane.
+        if self._timer.isActive():
+            sweep = QLinearGradient()
+            width = self.width()
+            centre = (self._phase * 1.6 - 0.3) * width
+            sweep.setStart(centre - width * 0.22, 0)
+            sweep.setFinalStop(centre + width * 0.22, 0)
+            highlight = QColor(t.BORDER_STRONG)
+            highlight.setAlpha(0)
+            sweep.setColorAt(0.0, highlight)
+            mid = QColor(t.BORDER_STRONG)
+            mid.setAlpha(90)
+            sweep.setColorAt(0.5, mid)
+            sweep.setColorAt(1.0, highlight)
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceAtop
+            )
+            painter.fillRect(self.rect(), sweep)
         painter.end()

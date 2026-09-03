@@ -6,22 +6,43 @@ terms of what it looks like. That is the difference between a design
 system and a pile of hex codes: adding a light theme becomes filling in a
 second column here rather than auditing forty widgets.
 
-Two rules make this hold:
+## The direction
+
+Both palettes are built on a **warm neutral ground with a cool accent**.
+
+That is a decision, and it is the one carrying the product's identity.
+The reflex answer for a dark desktop tool is a cool grey-blue near-black
+with a blue accent, which is what this app used to be, and which is
+indistinguishable from every generated "modern dark mode": zinc surfaces,
+white-at-10% hairlines, one unchosen blue. Shifting the neutrals warm
+(hue near 35 degrees, chroma low enough that nobody would call it brown)
+puts the whole field in tension with the cool accent, so the accent reads
+as *chosen* rather than as the only color present. It also makes the
+light theme paper rather than office-white, which is the right material
+for a surface that is mostly text.
+
+Neither theme uses pure black or pure white anywhere, including the
+toast, which is the one deliberately inverted surface in the product.
+
+## Rules that keep this honest
 
 * A role is defined by its job and its pairing. `text_on_accent` is only
-  ever drawn on `accent`; `danger_fg` is only ever drawn on `surface` or
-  `danger_bg`. The contrast tests in tests/test_design_system.py assert
-  exactly those pairings, in both themes.
-* Interaction variants (`_hover`, `_pressed`, `_selected`) are derived
-  from their base with `mix()` where a mechanical relationship is right,
-  and hand-tuned where it isn't. Deriving them means dark and light can
-  never drift apart by one being updated and the other forgotten.
+  ever drawn on `accent_solid`; `danger_fg` is only ever drawn on
+  `surface` or `danger_bg`. `CONTRAST_CONTRACT` lists every pairing the
+  app actually renders and the tests measure all of them, in both themes.
+* Accent comes in two families, because conflating them is how "blue
+  button with an unreadable white label" happens. `accent*` is the hue:
+  indicators, focus, selection tints, icon highlights - it never carries
+  text. `accent_solid*` is a filled control that carries
+  `text_on_accent`, and is tuned for 4.5:1 against it.
+* Interaction variants move in one consistent direction: lighter in dark,
+  darker in light. A light theme that lightens on hover has nowhere to go
+  from its top surface.
 
-Elevation runs *outward from the navigation*, not simply "darker is
-lower": the sidebar is the most recessed surface, the message list sits
-above it, and the reading pane is the brightest surface in the window.
-That gradient is what tells a first-time user, without a single label,
-which pane is chrome and which pane is content.
+Elevation runs *outward from the navigation*: the sidebar is the most
+recessed surface, the message list sits above it, and the reading pane is
+the brightest. That gradient tells a first-time user which pane is chrome
+and which is content without a single label.
 """
 
 from __future__ import annotations
@@ -62,6 +83,16 @@ def contrast_ratio(foreground: str, background: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def is_warm(color: str) -> bool:
+    """True when a neutral leans warm (more red than blue).
+
+    The direction is only real if the neutrals actually carry it, so the
+    tests assert this rather than trusting the docstring above.
+    """
+    r, _g, b = _rgb(color)
+    return r > b
+
+
 # ------------------------------------------------------------ role table
 
 
@@ -80,8 +111,15 @@ class Palette:
     surface: str          # reading pane, panels, inputs, cards
     surface_hover: str    # a surface under the pointer
     surface_active: str   # a surface being pressed
-    overlay: str          # menus, popovers, dialogs, toasts
+    overlay: str          # menus, popovers, dialogs
     scrim: str            # the dim behind a modal
+
+    # Material. Real surfaces catch light along their top edge and cast a
+    # shadow tinted by the ground they sit on. A flat fill with a grey 1px
+    # border is what makes an interface look like a wireframe of itself.
+    highlight: str         # inner top edge of a raised surface
+    highlight_strong: str  # the same, on a filled control
+    shadow: str            # drop shadow color, tinted to the ground
 
     # Selection
     selected: str         # selected row / active navigation fill
@@ -101,13 +139,7 @@ class Palette:
     text_on_accent: str
     text_link: str
 
-    # Accent / brand
-    # Accent has two families, and conflating them is how "blue button
-    # with unreadable white label" happens:
-    #   accent*      - the *hue*: indicators, focus, selected-row tints,
-    #                  icon highlights. Never carries text on top of it.
-    #   accent_solid* - a filled control that carries `text_on_accent`,
-    #                  and is therefore tuned for 4.5:1 against white.
+    # Accent. Two families - see the module docstring.
     accent: str
     accent_hover: str
     accent_pressed: str
@@ -149,139 +181,146 @@ class Palette:
 
 # ----------------------------------------------------------------- dark
 #
-# A neutral graphite, not a blue-black: a strongly tinted dark theme reads
-# as a "skin" rather than as a product, and it fights every message body
-# rendered next to it. The three main surfaces are two full steps apart so
-# the pane structure is legible at a glance even with all borders removed.
+# Warm graphite. The neutrals run hue ~35 degrees at very low chroma - far
+# enough that the field reads warm next to the accent, never far enough to
+# read as brown. Compare the previous #17181d surface with its #2a2d35
+# hairline: that pair was the generated-dark-mode default in both hue and
+# step size.
 
-_D_ACCENT = "#4c8dff"
+_D_ACCENT = "#5aa2ff"
 
 DARK = Palette(
     name="dark",
     is_dark=True,
 
-    sidebar="#0b0c0e",
-    canvas="#121317",
-    surface="#17181d",
-    surface_hover="#1e2026",
-    surface_active="#24262e",
-    overlay="#1b1d22",
-    scrim="rgba(0, 0, 0, 140)",
+    sidebar="#141311",
+    canvas="#1b1917",
+    surface="#22201d",
+    surface_hover="#2b2825",
+    surface_active="#35312d",
+    overlay="#26231f",
+    scrim="rgba(10, 8, 6, 165)",
 
-    selected="#1b2635",
-    selected_inactive="#1a1c22",
+    highlight="rgba(255, 246, 232, 20)",
+    highlight_strong="rgba(255, 252, 245, 48)",
+    shadow="rgba(8, 6, 4, 150)",
 
-    border_subtle="#1f2127",
-    border="#2a2d35",
-    border_strong="#3b3f4a",
-    focus_ring="#78aaff",
+    selected="#1e2733",
+    selected_inactive="#262320",
 
-    text_primary="#e8eaee",
-    text_secondary="#a0a5b0",
-    text_tertiary="#7d838e",
-    text_disabled="#565b64",
+    border_subtle="#262320",
+    border="#322e2a",
+    border_strong="#4a443d",
+    focus_ring="#7fb4ff",
+
+    text_primary="#f2eee7",
+    text_secondary="#b3aa9f",
+    text_tertiary="#948b7d",
+    text_disabled="#5f584f",
     text_on_accent="#ffffff",
-    text_link="#7fb0ff",
+    text_link="#86b6ff",
 
     accent=_D_ACCENT,
-    accent_hover="#6ba0ff",
-    accent_pressed="#3a73d9",
-    accent_subtle="#16233a",
-    accent_fg="#85b4ff",
-    accent_solid="#2569db",
-    accent_solid_hover="#2f74e6",
-    accent_solid_pressed="#1c56b8",
+    accent_hover="#7fb6ff",
+    accent_pressed="#3d7fd6",
+    accent_subtle="#1a2637",
+    accent_fg="#8ab8ff",
+    accent_solid="#2a6fd6",
+    accent_solid_hover="#3a7ee0",
+    accent_solid_pressed="#205ab4",
 
-    info_fg="#7fb0ff",
-    info_bg="#16233a",
-    success_fg="#3fb950",
-    success_bg="#122117",
-    warning_fg="#d8a531",
-    warning_bg="#241d0f",
-    danger_fg="#f85149",
-    danger_bg="#2a1416",
-    danger_strong="#c93c34",
+    info_fg="#86b6ff",
+    info_bg="#1a2637",
+    success_fg="#5cb37a",
+    success_bg="#16231a",
+    warning_fg="#d9a441",
+    warning_bg="#262015",
+    danger_fg="#f0716a",
+    danger_bg="#2c1a18",
+    danger_strong="#c4463f",
 
-    star="#e3b341",
+    star="#e8b83f",
     unread=_D_ACCENT,
 
     avatar_hues=(
-        "#5b8def", "#4fa8a0", "#8b7ce0", "#c9834f",
-        "#5aa96f", "#c07b9d", "#4f93c4", "#a3894a",
+        "#6f97e2", "#4fa398", "#9083d6", "#c4854f",
+        "#5fa670", "#bd7f96", "#5b93bd", "#a08a54",
     ),
 )
 
 # ---------------------------------------------------------------- light
 #
-# Not "the dark theme inverted". Light UI needs *more* structure from
+# Warm paper, not office white. Light UI takes more of its structure from
 # borders and less from fills, so the border roles carry more weight here
-# and the surface steps are closer together - a light theme with dark
-# theme contrast between panes looks like a bug report screenshot.
+# and the surface steps sit closer together.
 
-_L_ACCENT = "#1a6fe0"
+_L_ACCENT = "#1a63c4"
 
 LIGHT = Palette(
     name="light",
     is_dark=False,
 
-    sidebar="#f1f2f4",
-    canvas="#f7f8fa",
-    surface="#ffffff",
-    surface_hover="#eceef1",
-    surface_active="#e3e6ea",
-    overlay="#ffffff",
-    scrim="rgba(16, 18, 22, 90)",
+    sidebar="#efece5",
+    canvas="#f7f4ee",
+    surface="#fffdf8",
+    surface_hover="#eae5db",
+    surface_active="#ded8cb",
+    overlay="#fffdf8",
+    scrim="rgba(38, 32, 24, 90)",
 
-    selected="#e6f0fd",
-    selected_inactive="#eef0f3",
+    highlight="rgba(255, 255, 255, 200)",
+    highlight_strong="rgba(255, 255, 255, 88)",
+    shadow="rgba(72, 60, 44, 46)",
 
-    border_subtle="#eceef1",
-    border="#dcdfe4",
-    border_strong="#b9bec7",
-    focus_ring="#1a6fe0",
+    selected="#e6efff",
+    selected_inactive="#ebe7de",
 
-    text_primary="#16181d",
-    text_secondary="#565c66",
-    text_tertiary="#666c75",
-    text_disabled="#a2a8b2",
+    border_subtle="#ebe6dc",
+    border="#ddd6c9",
+    border_strong="#bab2a3",
+    focus_ring="#1a63c4",
+
+    text_primary="#1d1a16",
+    text_secondary="#585146",
+    text_tertiary="#6c6458",
+    text_disabled="#a89f92",
     text_on_accent="#ffffff",
-    text_link="#0f5ec4",
+    text_link="#0f5bbd",
 
     accent=_L_ACCENT,
-    accent_hover="#1560c4",
-    accent_pressed="#0f4c9c",
-    accent_subtle="#eaf2fe",
-    accent_fg="#0f5ec4",
+    accent_hover="#1554aa",
+    accent_pressed="#10448c",
+    accent_subtle="#e8f0fd",
+    accent_fg="#0f5bbd",
     accent_solid=_L_ACCENT,
-    accent_solid_hover="#1560c4",
-    accent_solid_pressed="#0f4c9c",
+    accent_solid_hover="#1554aa",
+    accent_solid_pressed="#10448c",
 
-    info_fg="#0f5ec4",
-    info_bg="#eaf2fe",
-    success_fg="#1a7f37",
-    success_bg="#e8f5ec",
-    warning_fg="#7d5800",
-    warning_bg="#fdf3dc",
-    danger_fg="#cf222e",
-    danger_bg="#fdeced",
-    danger_strong="#cf222e",
+    info_fg="#0f5bbd",
+    info_bg="#e8f0fd",
+    success_fg="#1c7a3c",
+    success_bg="#e7f3e9",
+    warning_fg="#7a5600",
+    warning_bg="#fbf1d8",
+    danger_fg="#c9302c",
+    danger_bg="#fceceb",
+    danger_strong="#c9302c",
 
-    star="#8a6400",
+    star="#916008",
     unread=_L_ACCENT,
 
     avatar_hues=(
-        "#3a6fc4", "#2d7a72", "#6a4fd0", "#a06333",
-        "#3a7a55", "#a8497c", "#356e91", "#7a6633",
+        "#3a6cc0", "#2d7a72", "#6a52c4", "#a06333",
+        "#3a7a55", "#a2497a", "#356e91", "#7a6633",
     ),
 )
 
 PALETTES = {DARK.name: DARK, LIGHT.name: LIGHT}
 
 # The pairings the app actually renders, asserted by the contrast tests.
-# (foreground role, background role, minimum ratio). 4.5 is WCAG AA for
-# body text; 3.0 applies to large/bold text and to text drawn on a
-# transient interaction surface (hover/pressed), which a reader is never
-# asked to read at rest.
+# 4.5 is WCAG AA for body text; 3.0 applies to large/bold text and to text
+# drawn on a transient interaction surface (hover/pressed), which a reader
+# is never asked to read at rest.
 CONTRAST_CONTRACT: tuple[tuple[str, str, float], ...] = (
     ("text_primary", "sidebar", 4.5),
     ("text_primary", "canvas", 4.5),
@@ -329,6 +368,15 @@ ELEVATION_ORDER = ("sidebar", "canvas", "surface")
 
 # Interaction surfaces move away from `surface` in a consistent direction:
 # lighter in dark mode, darker in light mode. A light theme that lightens
-# on hover has nowhere to go from white, which is why this is not simply
-# an extension of ELEVATION_ORDER.
+# on hover has nowhere to go from its top surface, which is why this is
+# not simply an extension of ELEVATION_ORDER.
 INTERACTION_ORDER = ("surface", "surface_hover", "surface_active")
+
+# The neutrals that must actually carry the warm direction. Listed rather
+# than inferred, so "the palette drifted cool again" fails a test instead
+# of being noticed a year later.
+WARM_NEUTRALS = (
+    "sidebar", "canvas", "surface", "surface_hover", "surface_active",
+    "overlay", "text_primary", "text_secondary", "text_tertiary",
+    "border", "border_strong",
+)

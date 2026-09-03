@@ -33,7 +33,7 @@ Details that carry more than their size suggests:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QVariantAnimation, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -49,6 +49,8 @@ from app.ui.components.avatar import Avatar
 from app.ui.components.buttons import Button, IconButton
 from app.ui.components.dialog import divider
 from app.ui.components.states import EmptyState
+from app.ui.design import motion
+from app.ui.design.motion import ValueAnimator
 from app.ui.html_view import HtmlMailView
 from app.ui.svg_icon import themed, themed_pixmap
 
@@ -135,6 +137,10 @@ class ReaderPane(QWidget):
 
         self.set_starred(False)
         self.set_actions_enabled(False)
+
+        # 1 -> the header is still arriving, 0 -> settled.
+        self._reveal = ValueAnimator(self, 0.0, motion.DURATION_VERY_SLOW,
+                                     motion.EASE_SMOOTH_OUT)
 
     # ------------------------------------------------------------- build
 
@@ -394,9 +400,25 @@ class ReaderPane(QWidget):
 
         self.set_actions_enabled(True)
         self.set_starred(is_starred)
+        self._play_reveal()
         if has_attachments and not self._attachments.count():
             self.set_attachments([{"name": "Attachment"}])
         self._stack.setCurrentIndex(1)
+
+    def _apply_measure(self) -> None:
+        """Cap the message body's line length.
+
+        Text set 1,100px wide is not a wide column, it is an unreadable
+        one: the eye loses the line it was on during the return sweep.
+        Extra width past the measure becomes symmetric margin, so a
+        maximised window gives the message more air rather than longer
+        lines.
+        """
+        overflow = self.width() - t.READER_MAX_TEXT_WIDTH
+        margin = max(0, overflow // 2)
+        if getattr(self, "_measure_margin", None) != margin:
+            self._measure_margin = margin
+            self.body.setViewportMargins(margin, 0, margin, 0)
 
     def _elide_sender_address(self) -> None:
         from PySide6.QtGui import QFontMetrics
@@ -411,7 +433,49 @@ class ReaderPane(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         self._elide_sender_address()
+        self._apply_measure()
         super().resizeEvent(event)
+
+    def _play_reveal(self) -> None:
+        """Rise the header lines into place as the message arrives."""
+        self._reveal.set_now(1.0)
+        self._reveal.to(0.0)
+        for index, widget in enumerate(
+            (self._subject, self._sender_name, self._recipients)
+        ):
+            self._animate_line(widget, index)
+
+    def _animate_line(self, widget, index: int) -> None:
+        """One line of the header rising into place, `index` steps late."""
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+        duration = t.duration(motion.DURATION_VERY_SLOW)
+        if duration <= 0:
+            widget.setGraphicsEffect(None)
+            return
+
+        effect = QGraphicsOpacityEffect(widget)
+        effect.setOpacity(0.0)
+        widget.setGraphicsEffect(effect)
+
+        def run():
+            try:
+                fade = QVariantAnimation(widget)
+            except RuntimeError:
+                return
+            fade.setDuration(duration)
+            fade.setEasingCurve(motion.EASE_SMOOTH_OUT)
+            fade.setStartValue(0.0)
+            fade.setEndValue(1.0)
+            fade.valueChanged.connect(lambda v: effect.setOpacity(float(v)))
+            # The effect is dropped once it has done its job: leaving a
+            # QGraphicsEffect installed on a label costs a repaint through
+            # a software raster path for the rest of its life.
+            fade.finished.connect(lambda: widget.setGraphicsEffect(None))
+            fade.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+
+        QTimer.singleShot(motion.stagger_delay(index, 3), run)
 
     def set_actions_enabled(self, enabled: bool) -> None:
         for button in (

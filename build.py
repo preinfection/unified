@@ -58,7 +58,27 @@ def generate_icon() -> None:
     del app
 
 
+def _gmail_discovery_document() -> Path:
+    """The one Google API discovery document this app needs.
+
+    Checked before the build so a missing or moved document fails here,
+    loudly, instead of producing an executable that only fails the first
+    time someone signs in to Gmail. What actually does the pruning is
+    installer/pyinstaller_hooks/hook-googleapiclient.model.py.
+    """
+    import googleapiclient
+
+    return (
+        Path(googleapiclient.__file__).parent
+        / "discovery_cache" / "documents" / "gmail.v1.json"
+    )
+
+
 def build() -> int:
+    gmail_doc = _gmail_discovery_document()
+    if not gmail_doc.exists():
+        raise SystemExit(f"Gmail discovery document not found at {gmail_doc}")
+
     args = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
@@ -73,8 +93,11 @@ def build() -> int:
         # code by default, never loose non-Python data files it can't see
         # referenced anywhere in the source.
         "--add-data", f"{ROOT / 'assets' / 'icons'}{os.pathsep}assets/icons",
-        # Google API client ships bundled discovery documents as data files.
-        "--collect-data", "googleapiclient",
+        # Only the Gmail discovery document is bundled - see
+        # installer/pyinstaller_hooks/hook-googleapiclient.model.py, which
+        # replaces PyInstaller's own hook for that module and drops the
+        # other ~599 Google API documents (about 100 MB).
+        "--additional-hooks-dir", str(ROOT / "installer" / "pyinstaller_hooks"),
         # Keyring discovers its Windows backend at runtime.
         "--hidden-import", "keyring.backends.Windows",
         "--hidden-import", "win32ctypes.core",

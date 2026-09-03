@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 from app.ui import theme as t
 from app.ui.components.buttons import Button, DangerButton, PrimaryButton
 from app.ui.components.section_header import DialogHeading
+from app.ui.design import motion
 from app.ui.native_theme import apply_dark_titlebar
 
 
@@ -77,6 +78,7 @@ class AppDialog(QDialog):
         apply_dark_titlebar(self)
 
         self._busy = False
+        self._entered = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(t.SPACE_3XL, t.SPACE_2XL, t.SPACE_3XL, t.SPACE_2XL)
@@ -110,6 +112,12 @@ class AppDialog(QDialog):
         self._action_slot.setSpacing(t.SPACE_MD)
         footer.addLayout(self._action_slot)
         root.addLayout(footer)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if not self._entered:
+            self._entered = True
+            motion.fade_in(self, duration=motion.MODAL_OPEN, start=0.0)
 
     # ------------------------------------------------------------- body
 

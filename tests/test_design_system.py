@@ -408,23 +408,78 @@ def test_every_icon_only_control_has_an_accessible_name(qapp):
             )
 
 
-def test_nav_item_paints_an_accent_indicator_when_selected(qapp):
-    """The signature selected-navigation cue: a 3px accent bar on the
-    leading edge, asserted on real pixels rather than on a stylesheet
-    string. A tinted fill alone reads as hover at a glance."""
-    from app.ui.components.nav_pill import NavPill
+def test_nav_indicator_marks_the_selected_row_with_an_accent_bar(qapp):
+    """The signature selected-navigation cue: an accent bar on the leading
+    edge of the active row, asserted on real pixels rather than on a
+    stylesheet string. A tinted fill alone reads as hover at a glance."""
+    from app.ui.components.nav_pill import NavList, NavPill
 
-    pill = NavPill("Inbox")
-    pill.resize(200, t.TAB_HEIGHT)
-    pill.show()
+    nav = NavList()
+    for label in ("Inbox", "Starred", "Sent"):
+        item = NavPill(label)
+        item.setFixedHeight(t.TAB_HEIGHT)
+        nav.add_item(item)
+    nav.resize(200, t.TAB_HEIGHT * 3 + 8)
+    nav.show()
+    qapp.processEvents()
 
-    unselected = pill.grab().toImage().pixelColor(1, t.TAB_HEIGHT // 2)
-    assert unselected.name() != t.ACCENT
+    nav.set_current(0, animate=False, emit=False)
+    qapp.processEvents()
+    image = nav.grab().toImage()
+    assert image.pixelColor(1, t.TAB_HEIGHT // 2).name() == t.ACCENT, (
+        "the selected row has no accent bar"
+    )
+    # ...and only the selected row has one.
+    third_row_middle = int(t.TAB_HEIGHT * 2.5)
+    assert image.pixelColor(1, third_row_middle).name() != t.ACCENT
 
-    pill.setChecked(True)
-    pill._set_indicator(1.0)  # skip the animation; assert the end state
-    selected = pill.grab().toImage().pixelColor(1, t.TAB_HEIGHT // 2)
-    assert selected.name() == t.ACCENT
+
+def test_nav_indicator_travels_between_rows_rather_than_blinking(qapp):
+    """Selection is one indicator moving, not two marks blinking.
+
+    Asserted by catching it mid-flight: immediately after the change the
+    indicator must still be somewhere between the two rows, which is only
+    true if it is animating rather than jumping.
+    """
+    import time
+
+    from app.ui.components.nav_pill import NavList, NavPill
+
+    manager = t.theme_manager
+    original = manager._reduced_motion
+    try:
+        manager._reduced_motion = False
+        nav = NavList()
+        for label in ("Inbox", "Starred", "Sent"):
+            item = NavPill(label)
+            item.setFixedHeight(t.TAB_HEIGHT)
+            nav.add_item(item)
+        nav.resize(200, t.TAB_HEIGHT * 3 + 8)
+        nav.show()
+        qapp.processEvents()
+
+        nav.set_current(0, animate=False, emit=False)
+        qapp.processEvents()
+        start = nav._y.value
+
+        nav.set_current(2, emit=False)
+        for _ in range(3):
+            qapp.processEvents()
+            time.sleep(0.012)
+        travelling = nav._y.value
+        assert start < travelling, "the indicator did not start moving"
+        assert travelling < nav._items[2].y(), (
+            "the indicator jumped straight to the target instead of travelling"
+        )
+
+        for _ in range(80):
+            qapp.processEvents()
+            time.sleep(0.006)
+        assert abs(nav._y.value - nav._items[2].y()) < 1.5, (
+            "the indicator never arrived"
+        )
+    finally:
+        manager._reduced_motion = original
 
 
 def test_unread_and_read_rows_share_one_left_edge(qapp):
@@ -468,11 +523,25 @@ def test_avatar_color_is_stable_across_processes():
 
 
 def test_toast_surface_stays_theme_independent():
-    """Toasts are the one deliberately inverted surface: a black card in
+    """Toasts are the one deliberately inverted surface: a dark card in
     both themes, so a transient system message never reads as part of the
-    mailbox behind it."""
-    assert t.TOAST_BG == "#000000"
+    mailbox behind it.
+
+    Not pure black, though. #000000 is a documented design tell - no real
+    material sits at the absolute floor of the display - and against a
+    warm graphite app a pure-black card reads as a hole rather than as a
+    surface on top of it.
+    """
     assert t.TOAST_STRIPE_WIDTH == 3
+    assert t.TOAST_BG != "#000000", "the toast surface is pure black"
+    assert relative_luminance(t.TOAST_BG) < 0.02, "the toast is not dark"
+    # Inverted: darker than the most recessed surface of *either* theme,
+    # so it never blends into the window behind it.
+    for palette in ALL_PALETTES:
+        assert (relative_luminance(t.TOAST_BG)
+                < relative_luminance(palette.sidebar)), (
+            f"the toast does not read as inverted against {palette.name}"
+        )
     for kind, color in t.TOAST_KIND_COLORS.items():
         assert contrast_ratio(color, t.TOAST_BG) >= 3.0, (
             f"toast {kind} color is illegible on the toast surface"

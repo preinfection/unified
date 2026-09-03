@@ -123,7 +123,9 @@ class CommandBar(QWidget):
         self.refresh_theme_icon()
 
     def refresh_mark(self) -> None:
-        self.mark.setPixmap(make_mark(t.ICON_LG, t.TEXT_PRIMARY))
+        # The mark is the one place the accent appears in the chrome, so
+        # the window has a color anchor without anything being decorated.
+        self.mark.setPixmap(make_mark(t.ICON_LG, t.ACCENT))
 
     # -------------------------------------------------------------- search
 

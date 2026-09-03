@@ -87,14 +87,22 @@ def test_toast_surface_is_fully_opaque(qapp, window):
     assert not bleed, f"backdrop bled through the toast surface at {bleed[:5]}"
 
 
-def test_toast_surface_is_black(qapp, window):
+def test_toast_surface_is_the_inverted_toast_color(qapp, window):
+    """The card paints the toast surface itself.
+
+    The assertion is against `t.TOAST_BG` rather than a literal, because
+    the surface is a near-black by design and not pure #000000 - see
+    test_design_system.test_toast_surface_stays_theme_independent for the
+    contract that value has to meet. What matters here is that the card
+    actually paints it.
+    """
     host, image = _settled(
         qapp, window, ("Sync complete", "3 new messages", "success")
     )
     geo = host._toasts[0].geometry()
     # Well inside the card, clear of the stripe, border and any text.
     color = image.pixelColor(geo.x() + geo.width() - 20, geo.y() + 10)
-    assert color.name() == t.TOAST_BG == "#000000"
+    assert color.name() == t.TOAST_BG
 
 
 def test_accent_stripe_survives_the_repaint(qapp, window):

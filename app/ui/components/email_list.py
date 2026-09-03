@@ -50,7 +50,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QListView,
     QStyle,
@@ -60,6 +60,8 @@ from PySide6.QtWidgets import (
 
 from app.ui import theme as t
 from app.ui.components.avatar import paint_avatar
+from app.ui.design import motion
+from app.ui.design.motion import ValueAnimator, blend
 from app.ui.svg_icon import tinted_pixmap
 
 # The default density's row height, kept as a module constant because the
@@ -231,6 +233,11 @@ class EmailRowDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.show_account = False
+        self.view = None
+
+    def _hover_alpha(self, index) -> float:
+        view = self.view
+        return view.hover_alpha(index.row()) if view is not None else 0.0
 
     @staticmethod
     def font_for(role: str):
@@ -251,7 +258,7 @@ class EmailRowDelegate(QStyledItemDelegate):
         if msg.get("is_header"):
             self._paint_header(painter, option, msg["label"])
         else:
-            self._paint_row(painter, option, msg)
+            self._paint_row(painter, option, msg, index)
         painter.restore()
 
     # ------------------------------------------------------------ header
@@ -282,26 +289,23 @@ class EmailRowDelegate(QStyledItemDelegate):
     # --------------------------------------------------------------- row
 
     def _paint_row(self, painter: QPainter, option: QStyleOptionViewItem,
-                   msg: dict) -> None:
+                   msg: dict, index: QModelIndex) -> None:
         rect = option.rect.adjusted(4, 1, -4, -1)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         unread = not msg["is_read"]
         lines = t.row_lines()
 
-        if selected:
+        # The selected surface is painted by the view, underneath every
+        # row, so it can travel from the old row to the new one instead of
+        # blinking out of one and into the other. Hover is animated by the
+        # view too and read back here, because a delegate has no state of
+        # its own to animate with.
+        hover = self._hover_alpha(index)
+        if hover > 0.01 and not selected:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(t.qcolor(t.BG_SELECTED))
-            painter.drawRoundedRect(QRectF(rect), t.RADIUS_SM, t.RADIUS_SM)
-            bar_h = rect.height() * 0.62
-            painter.setBrush(t.qcolor(t.ACCENT))
-            painter.drawRoundedRect(
-                QRectF(rect.left(), rect.top() + (rect.height() - bar_h) / 2, 3, bar_h),
-                1.5, 1.5,
-            )
-        elif hovered:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(t.qcolor(t.BG_HOVER))
+            painter.setBrush(blend(
+                QColor(0, 0, 0, 0), t.qcolor(t.BG_HOVER), hover
+            ))
             painter.drawRoundedRect(QRectF(rect), t.RADIUS_SM, t.RADIUS_SM)
 
         # -- unread gutter (fixed width, so every row's avatar aligns)
@@ -457,6 +461,7 @@ class EmailListView(QListView):
         self._model = EmailListModel(self)
         self.setModel(self._model)
         self._delegate = EmailRowDelegate(self)
+        self._delegate.view = self
         self.setItemDelegate(self._delegate)
         self.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.setSelectionMode(QListView.SelectionMode.SingleSelection)
@@ -475,12 +480,38 @@ class EmailListView(QListView):
         self.verticalScrollBar().valueChanged.connect(self._on_scrolled)
         t.theme_manager.density_changed.connect(self._on_density_changed)
 
+        # ---- animated interaction state
+        # Hover fades in on the row under the pointer and out of the one it
+        # left, so sweeping down a list reads as one light moving rather
+        # than as rows strobing.
+        self._hover_row = -1
+        self._leaving_row = -1
+        self._hover_in = ValueAnimator(self.viewport(), 0.0,
+                                       motion.DURATION_HOVER)
+        self._hover_out = ValueAnimator(self.viewport(), 0.0,
+                                        int(motion.DURATION_HOVER * 1.4),
+                                        motion.EASE_BOUNCE_STRONG)
+        # The selected surface travels between rows (transitions.dev
+        # "tabs sliding"): one indicator, painted under every row.
+        self._sel_y = ValueAnimator(self.viewport(), 0.0,
+                                    motion.TABS_DURATION, motion.EASE_SMOOTH_OUT)
+        self._sel_h = ValueAnimator(self.viewport(), 0.0,
+                                    motion.TABS_DURATION, motion.EASE_SMOOTH_OUT)
+        self._sel_presence = ValueAnimator(self.viewport(), 0.0,
+                                           motion.DURATION_FAST)
+        # The first placement lands; later ones travel.
+        self._sel_placed = False
+
     # ------------------------------------------------------------------ data
 
     def set_rows(self, rows: list[dict], keep_selected_id: int | None = None) -> None:
         self._model.set_rows(rows)
+        self._set_hover_row(-1)
         if keep_selected_id is not None:
             self._select_silently(keep_selected_id)
+        # A reload is not a journey: the indicator lands where the row now
+        # is instead of sliding across a list that changed under it.
+        self._sync_selection_indicator(animate=False)
 
     def set_show_account(self, show: bool) -> None:
         """Show each row's receiving account - on in a unified view,
@@ -514,6 +545,7 @@ class EmailListView(QListView):
         self.selectionModel().blockSignals(True)
         self.setCurrentIndex(index)
         self.selectionModel().blockSignals(False)
+        self._sync_selection_indicator(animate=False)
 
     def move_selection(self, delta: int) -> None:
         """Keyboard j/k and arrow navigation, skipping date headers."""
@@ -532,6 +564,95 @@ class EmailListView(QListView):
             self.setCurrentIndex(index)
             self.scrollTo(index, QListView.ScrollHint.EnsureVisible)
 
+    # ------------------------------------------------------ animated state
+
+    def hover_alpha(self, row: int) -> float:
+        """How lit row `row` currently is. Read by the delegate, which has
+        no state of its own to animate with."""
+        if row == self._hover_row:
+            return self._hover_in.value
+        if row == self._leaving_row:
+            return self._hover_out.value
+        return 0.0
+
+    def _set_hover_row(self, row: int) -> None:
+        if row == self._hover_row:
+            return
+        # Hover-out settles more slowly and on a softer curve than
+        # hover-in arrives, so leaving a row does not snap.
+        self._leaving_row = self._hover_row
+        self._hover_out.set_now(self._hover_in.value)
+        self._hover_out.to(0.0)
+        self._hover_row = row
+        self._hover_in.set_now(0.0)
+        if row >= 0:
+            self._hover_in.to(1.0)
+        self.viewport().update()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        index = self.indexAt(event.position().toPoint())
+        row = index.row() if index.isValid() else -1
+        if row >= 0:
+            data = index.data(ROLE_MSG)
+            if data and data.get("is_header"):
+                row = -1
+        self._set_hover_row(row)
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._set_hover_row(-1)
+        super().leaveEvent(event)
+
+    def _sync_selection_indicator(self, *, animate: bool = True) -> None:
+        index = self.currentIndex()
+        if not index.isValid():
+            self._sel_presence.to(0.0, duration=motion.DURATION_QUICK)
+            return
+        rect = self.visualRect(index)
+        if rect.height() <= 0:
+            return
+        top = float(rect.y() + 1)
+        height = float(rect.height() - 2)
+        if animate and self._sel_placed:
+            self._sel_y.to(top)
+            self._sel_h.to(height)
+        else:
+            self._sel_y.set_now(top)
+            self._sel_h.set_now(height)
+        self._sel_placed = True
+        self._sel_presence.to(1.0, duration=motion.DURATION_FAST)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        # The travelling selection is painted first, on the viewport, so
+        # the rows draw over it and their text stays crisp.
+        presence = self._sel_presence.value
+        if presence > 0.01 and self._sel_h.value > 0:
+            painter = QPainter(self.viewport())
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            palette = t.theme_manager.palette
+            active = self.hasFocus() or self.viewport().underMouse()
+            rect = QRectF(
+                4, self._sel_y.value,
+                self.viewport().width() - 8, self._sel_h.value,
+            )
+            fill = QColor(palette.selected if active else palette.selected_inactive)
+            fill.setAlphaF(presence)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(rect, t.RADIUS_SM, t.RADIUS_SM)
+
+            bar_height = rect.height() * 0.62
+            bar = QColor(palette.accent)
+            bar.setAlphaF(presence if active else presence * 0.55)
+            painter.setBrush(bar)
+            painter.drawRoundedRect(
+                QRectF(rect.left(), rect.top() + (rect.height() - bar_height) / 2,
+                       3, bar_height),
+                1.5, 1.5,
+            )
+            painter.end()
+        super().paintEvent(event)
+
     # --------------------------------------------------------------- signals
 
     def _on_density_changed(self) -> None:
@@ -541,6 +662,7 @@ class EmailListView(QListView):
         self.scheduleDelayedItemsLayout()
 
     def _on_selection_changed(self, *_args) -> None:
+        self._sync_selection_indicator()
         email_id = self.selected_email_id()
         if email_id is not None:
             self.email_selected.emit(email_id)
@@ -551,6 +673,9 @@ class EmailListView(QListView):
             self.email_activated.emit(msg["id"])
 
     def _on_scrolled(self, value: int) -> None:
+        # Scrolling moved the viewport, not the selection - so the
+        # indicator follows instantly rather than chasing the row.
+        self._sync_selection_indicator(animate=False)
         bar = self.verticalScrollBar()
         if bar.maximum() and value >= bar.maximum() - 8:
             self.reached_end.emit()

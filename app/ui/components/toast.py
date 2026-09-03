@@ -30,6 +30,8 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app.ui import theme as t
+from app.ui.design import motion
+from app.ui.design.motion import ValueAnimator
 
 
 class _CountdownBar(QWidget):
@@ -129,7 +131,14 @@ class _ToastCard(QWidget):
         self._dismiss_timer.start(duration_ms)
 
         self._slide = QPropertyAnimation(self, b"pos", self)
-        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._slide.setEasingCurve(motion.EASE_SMOOTH_OUT)
+        # Entrance: rise from below through a soft blur while the card
+        # scales up from 0.97, so it materialises rather than appearing.
+        self._enter = ValueAnimator(self, 1.0, motion.TOAST_OPEN,
+                                    motion.EASE_SMOOTH_OUT)
+        self._enter.to(0.0)
+        self._leaving = ValueAnimator(self, 0.0, motion.TOAST_CLOSE,
+                                      motion.EASE_SMOOTH_OUT)
 
         self._dismissed = False
 
@@ -138,7 +147,7 @@ class _ToastCard(QWidget):
             self.move(point)
             return
         self._slide.stop()
-        self._slide.setDuration(t.TOAST_SLIDE_MS)
+        self._slide.setDuration(motion.TOAST_OPEN)
         self._slide.setStartValue(self.pos())
         self._slide.setEndValue(point)
         self._slide.start()
@@ -155,6 +164,16 @@ class _ToastCard(QWidget):
         """
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Entrance / exit: rise + scale, applied to the whole card.
+        progress = max(self._enter.value, self._leaving.value)
+        if progress > 0.001:
+            painter.setOpacity(max(0.0, 1.0 - progress))
+            scale = 1.0 - (1.0 - motion.SCALE_MEDIUM) * progress
+            centre = QRectF(self.rect()).center()
+            painter.translate(centre.x(), centre.y() + motion.DISTANCE_TOAST * progress)
+            painter.scale(scale, scale)
+            painter.translate(-centre.x(), -centre.y())
 
         radius = t.RADIUS_MD
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
@@ -175,7 +194,7 @@ class _ToastCard(QWidget):
         )
         painter.restore()
 
-        painter.setPen(QPen(t.qcolor(t.BORDER_LIGHT), 1))
+        painter.setPen(QPen(t.qcolor(t.TOAST_BORDER), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
         painter.end()
@@ -196,13 +215,13 @@ class _ToastCard(QWidget):
         self._countdown.stop()
         if self._on_dismiss:
             self._on_dismiss(self)
-        exit_x = self.parent().width() if self.parent() else self.x() + self.width()
-        self._slide.stop()
-        self._slide.setDuration(t.TOAST_SLIDE_MS)
-        self._slide.setStartValue(self.pos())
-        self._slide.setEndValue(QPoint(exit_x, self.y()))
-        self._slide.finished.connect(self.deleteLater)
-        self._slide.start()
+        # Leaves the way it arrived - down and out, not sideways.
+        # Same path in both directions, faster on the way out.
+        self._leaving.set_now(0.0)
+        self._leaving.to(1.0)
+        QTimer.singleShot(
+            max(1, t.duration(motion.TOAST_CLOSE)), self.deleteLater
+        )
 
 
 class ToastHost(QObject):

@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QCheckBox
 
 from app.ui import theme as t
+from app.ui.design import motion
 
 _WIDTH = 38
 _HEIGHT = 22
@@ -30,12 +31,12 @@ class Toggle(QCheckBox):
         self._knob_pos = 1.0 if self.isChecked() else 0.0
 
         self._anim = QPropertyAnimation(self, b"knobPos", self)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setEasingCurve(motion.EASE_TOGGLE)
         self.toggled.connect(self._animate_to)
 
     def _animate_to(self, checked: bool) -> None:
         target = 1.0 if checked else 0.0
-        duration = t.duration(t.DURATION_BASE)
+        duration = t.duration(motion.TOGGLE_TRAVEL)
         if not duration:
             # Reduced motion: the state still changes, it just does not
             # travel. Asking the theme manager here means the preference

@@ -46,6 +46,7 @@ from app.email import smtp_client
 from app.email.gmail_client import GmailClient
 from app.email.imap_client import ImapClient
 from app.ui import theme as t
+from app.ui.design import motion
 from app.ui.components.buttons import AccentButton, Button, IconButton
 from app.ui.components.dialog import confirm, divider, report_error
 from app.ui.components.dropdown import Dropdown
@@ -329,6 +330,12 @@ class ComposeDialog(QDialog):
         t.set_variant(field, "invalid", "true")
         self._set_status(message, tone="danger")
         field.setFocus()
+        # A shake says "this one" faster than reading the footer does.
+        row = field.parentWidget() or field
+        origin = row.pos()
+        motion.shake(
+            row, lambda dx: row.move(origin.x() + int(dx), origin.y())
+        )
 
     @staticmethod
     def _clear_invalid(field: QLineEdit) -> None:

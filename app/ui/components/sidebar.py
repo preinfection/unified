@@ -31,9 +31,8 @@ responsive.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPropertyAnimation, Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -43,8 +42,9 @@ from PySide6.QtWidgets import (
 from app.ui import theme as t
 from app.ui.components.account_item import AccountItem
 from app.ui.components.buttons import Button, IconButton
-from app.ui.components.nav_pill import NavPill
+from app.ui.components.nav_pill import NavList, NavPill
 from app.ui.components.section_header import SectionHeader
+from app.ui.design import motion
 
 VIEW_ITEMS = [
     ("inbox", "Inbox", "inbox"),
@@ -71,6 +71,10 @@ class SidebarWidget(QWidget):
         self._current_view: str | None = "inbox"
         self._current_account_id: int | None = None
         self._collapsed = False
+        self._width_anim = QPropertyAnimation(self, b"maximumWidth", self)
+        self._width_anim.setEasingCurve(motion.EASE_SMOOTH_OUT)
+        self._min_anim = QPropertyAnimation(self, b"minimumWidth", self)
+        self._min_anim.setEasingCurve(motion.EASE_SMOOTH_OUT)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(t.SPACE_MD, t.SPACE_LG, t.SPACE_MD, t.SPACE_MD)
@@ -81,17 +85,22 @@ class SidebarWidget(QWidget):
         root.addWidget(self._mailbox_header)
         root.addSpacing(t.SPACE_XS)
 
+        # One list, one indicator that travels between rows - see
+        # components/nav_pill.py for why selection is not drawn per row.
         self._nav_buttons: dict[str, NavPill] = {}
-        self._nav_group = QButtonGroup(self)
-        self._nav_group.setExclusive(True)
+        self._nav_order: list[str] = []
+        self._nav_list = NavList()
         for view, label, icon_name in VIEW_ITEMS:
             button = NavPill(label, icon=icon_name)
             button.setFixedHeight(t.TAB_HEIGHT + t.SPACE_SM)
             button.setToolTip(label)
-            button.clicked.connect(lambda _=False, v=view: self._on_nav_clicked(v))
-            self._nav_group.addButton(button)
+            self._nav_list.add_item(button)
             self._nav_buttons[view] = button
-            root.addWidget(button)
+            self._nav_order.append(view)
+        self._nav_list.selected.connect(
+            lambda index: self._on_nav_clicked(self._nav_order[index])
+        )
+        root.addWidget(self._nav_list)
 
         root.addSpacing(t.SPACE_XL)
 
@@ -141,7 +150,7 @@ class SidebarWidget(QWidget):
         self._settings_button.clicked.connect(self.settings_requested.emit)
         root.addWidget(self._settings_button)
 
-        self._nav_buttons["inbox"].setChecked(True)
+        self._nav_list.set_current(0, animate=False, emit=False)
 
     # ------------------------------------------------------------ collapse
 
@@ -151,15 +160,24 @@ class SidebarWidget(QWidget):
         if collapsed == self._collapsed:
             return
         self._collapsed = collapsed
-        self.setFixedWidth(t.SIDEBAR_RAIL_WIDTH if collapsed else t.SIDEBAR_WIDTH)
+        target = t.SIDEBAR_RAIL_WIDTH if collapsed else t.SIDEBAR_WIDTH
+        duration = t.duration(motion.CARD_RESIZE)
+        if duration <= 0:
+            self.setFixedWidth(target)
+        else:
+            # Both bounds travel together, or the layout snaps to one of
+            # them and the animation is invisible.
+            for animation in (self._width_anim, self._min_anim):
+                animation.stop()
+                animation.setDuration(duration)
+                animation.setStartValue(self.width())
+                animation.setEndValue(target)
+                animation.start()
         self._mailbox_header.setVisible(not collapsed)
         self._accounts_header.setVisible(not collapsed)
         self._scroll.setVisible(not collapsed)
         self._rail_spacer.setVisible(collapsed)
-        for view, label, _icon in VIEW_ITEMS:
-            button = self._nav_buttons[view]
-            button.setText("" if collapsed else label)
-            button.badge.setVisible(not collapsed and bool(button.badge.text()))
+        self._nav_list.set_collapsed(collapsed)
         self._settings_button.setText("" if collapsed else "Settings")
         self._settings_button.setProperty("shape", "icon" if collapsed else None)
         t.repolish(self._settings_button)
@@ -235,12 +253,11 @@ class SidebarWidget(QWidget):
         newly added account) without emitting signals back at it."""
         self._current_view = view
         self._current_account_id = account_id
-        if view is not None and view in self._nav_buttons:
-            self._nav_buttons[view].setChecked(True)
+        if view is not None and view in self._nav_order:
+            self._nav_list.set_current(
+                self._nav_order.index(view), emit=False
+            )
         else:
-            for button in self._nav_buttons.values():
-                button.setAutoExclusive(False)
-                button.setChecked(False)
-                button.setAutoExclusive(True)
+            self._nav_list.clear_current()
         for aid, item in self._account_items.items():
             item.set_selected(aid == account_id)

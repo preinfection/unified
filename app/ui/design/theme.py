@@ -217,7 +217,12 @@ class ThemeManager(QObject):
         if app is None:
             return
         from app.ui.design.stylesheet import render_stylesheet
+        from app.ui.design.tokens import make_font
 
+        # The base font is set here, not in the stylesheet: QSS font
+        # declarations override every QFont set in code, so a font-size in
+        # the stylesheet would flatten the entire type ramp to one size.
+        app.setFont(make_font("body"))
         app.setPalette(self.build_qpalette())
         app.setStyleSheet(render_stylesheet(self._palette))
 

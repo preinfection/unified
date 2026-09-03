@@ -289,15 +289,24 @@ def apply_elevation(widget, level: str = "md") -> None:
 
 
 # ------------------------------------------------------------------ toasts
-# Toasts are the one deliberately inverted surface in the product: a black
+# Toasts are the one deliberately inverted surface in the product: a dark
 # card in both themes, so a transient system message never reads as part
-# of the mailbox behind it. Painted directly in _ToastCard.paintEvent
-# (not via QSS) because a QWidget *subclass* does not paint a stylesheet
-# background at all unless WA_StyledBackground is set.
+# of the mailbox behind it.
+#
+# Not pure black. #000000 is a documented design tell - real materials are
+# never the absolute floor of the display, and a pure-black card against a
+# warm graphite app reads as a hole rather than as a surface sitting on
+# top of it. This is the same warm near-black the dark theme is built on,
+# two steps below its most recessed surface.
+#
+# Painted directly in _ToastCard.paintEvent, not via QSS: a QWidget
+# *subclass* does not paint a stylesheet background at all unless
+# WA_StyledBackground is set, which is what once made these transparent.
 TOAST_WIDTH = 320
 TOAST_MARGIN = 16
 TOAST_SPACING = 8
-TOAST_BG = "#000000"
+TOAST_BG = "#0d0c0a"
+TOAST_BORDER = "#2b2723"
 TOAST_STRIPE_WIDTH = 3
 TOAST_DEFAULT_DURATION_MS = 4500
 TOAST_SLIDE_MS = DURATION_SLOW
@@ -315,7 +324,7 @@ def toast_kind_colors() -> dict[str, str]:
 
 # Kept as a module attribute for call sites that index it directly. The
 # values are the *dark* palette's status hues, which is correct in both
-# themes because the toast surface is black in both.
+# themes because the toast surface is dark in both.
 TOAST_KIND_COLORS = {
     "info": _palette_mod.DARK.accent,
     "success": _palette_mod.DARK.success_fg,

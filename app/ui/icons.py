@@ -94,47 +94,60 @@ def _draw_icon(size: int) -> QPixmap:
     return pixmap
 
 
-def make_mark(size: int, color: str) -> QPixmap:
-    """The same padlock-U silhouette in a single color, for use *inside*
-    the app (the command bar lockup, the startup window).
+def make_mark(size: int, ink: str, ground: str | None = None) -> QPixmap:
+    """The in-app mark: a filled tile with the envelope flap knocked out.
 
-    The two-tone window/taskbar icon is built to survive any wallpaper, so
-    it carries a white lock body - which at 20px on a dark command bar
-    reads as a small white block rather than as a mark. A monochrome
-    version tinted from the palette is the right thing on a surface whose
-    color the app already controls.
+    The window/taskbar icon has to survive any wallpaper, so it is a
+    two-tone outlined padlock. That shape turns to mush at the 20px the
+    command bar renders it at - thin strokes go sub-pixel and it reads as
+    a small pale block.
+
+    A mark that has to work at 20px has to be *solid*. So this one is a
+    filled squircle carrying a knocked-out flap: one shape, one color, no
+    stroke to lose. It reads as mail instantly, and it is the only place
+    in the chrome that carries the accent, which gives the window a color
+    anchor without decorating anything.
     """
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    ink = QColor(color)
 
-    margin = max(1.0, size * 0.06)
-    content = size - 2 * margin
-    body_stroke = max(1.0, size * 0.09)
-    body_w = content * 0.82
-    body_h = content * 0.54
-    body_x = (size - body_w) / 2
-    body_y = size - margin - body_stroke / 2 - body_h
-    body_radius = body_w * 0.16
+    inset = size * 0.02
+    box = QRectF(inset, inset, size - 2 * inset, size - 2 * inset)
+    radius = box.width() * 0.28
 
-    stroke = max(1.5, size * 0.115)
-    min_gap = max(1.5, size * 0.10)
-    u_width = max(body_w * 0.52, 2 * stroke + min_gap)
-    u_x = (size - u_width) / 2
-    u_height = body_y - margin + stroke * 0.5
+    tile = QPainterPath()
+    tile.addRoundedRect(box, radius, radius)
+
+    # The flap: a wide, shallow V knocked out of the upper half. Shallow
+    # on purpose - a deep V reads as a chevron, not a letter.
+    pad = box.width() * 0.22
+    top = box.top() + box.height() * 0.30
+    mid = box.top() + box.height() * 0.58
+    thickness = max(1.4, box.width() * 0.115)
+
+    flap = QPainterPath()
+    flap.moveTo(box.left() + pad, top)
+    flap.lineTo(box.center().x(), mid)
+    flap.lineTo(box.right() - pad, top)
+    flap.lineTo(box.right() - pad, top + thickness)
+    flap.lineTo(box.center().x(), mid + thickness)
+    flap.lineTo(box.left() + pad, top + thickness)
+    flap.closeSubpath()
+
+    # A second, shorter stroke below it reads as the body of the letter.
+    line_y = mid + thickness * 1.9
+    body = QPainterPath()
+    body.addRoundedRect(
+        QRectF(box.left() + pad, line_y, box.width() - 2 * pad, thickness),
+        thickness / 2, thickness / 2,
+    )
 
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(ink)
-    painter.drawPath(_u_shape(u_x, margin, u_width, u_height, stroke))
-
-    painter.setPen(QPen(ink, body_stroke))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawRoundedRect(
-        QRectF(body_x, body_y, body_w, body_h), body_radius, body_radius
-    )
+    painter.setBrush(QColor(ink))
+    painter.drawPath(tile.subtracted(flap).subtracted(body))
     painter.end()
     return pixmap
 

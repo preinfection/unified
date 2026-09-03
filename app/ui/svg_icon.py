@@ -77,6 +77,21 @@ def tinted_pixmap(name: str, size: int, color: str) -> QPixmap:
     return pixmap
 
 
+@lru_cache(maxsize=None)
+def blurred_pixmap(name: str, size: int, color: str, radius: int) -> QPixmap:
+    """A tinted icon, blurred by `radius`.
+
+    Used by the icon-swap transition, where the outgoing glyph blurs out
+    as the incoming one resolves. Cached on the same key as the sharp
+    version, so a swap costs two cached lookups per frame rather than a
+    Gaussian.
+    """
+    from app.ui.design.motion import blur_pixmap
+
+    pixmap = tinted_pixmap(name, size, color)
+    return blur_pixmap(pixmap, radius) if radius > 0 else pixmap
+
+
 def icon_set(
     name: str,
     size: int,

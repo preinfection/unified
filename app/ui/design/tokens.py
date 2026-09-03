@@ -128,17 +128,35 @@ GROUP_HEADER_HEIGHT = 28
 # -------------------------------------------------------------- motion
 # Four steps, each with a job. Anything longer than DURATION_SLOW is the UI
 # making the user wait to watch an animation, which this app does not do.
-DURATION_INSTANT = 80    # press feedback
-DURATION_FAST = 120      # hover, focus rings, icon tints
-DURATION_BASE = 180      # selection, indicator growth, content swaps
-DURATION_SLOW = 280      # panels, dialogs, toasts entering or leaving
+# The single source is app/ui/design/motion.py, which also owns the easing
+# curves; these names remain so existing call sites keep working.
+DURATION_INSTANT = 90    # press feedback
+DURATION_FAST = 130      # hover, focus rings, icon tints
+DURATION_BASE = 190      # selection, indicator growth, content swaps
+DURATION_SLOW = 260      # panels, dialogs, toasts entering or leaving
 
 # ---------------------------------------------------------- typography
 # A Windows-first system stack. QFont.setFamilies falls through the list,
 # so no runtime OS check is needed; Segoe UI Variable is the Windows 11
 # system face and Segoe UI covers Windows 10.
-FONT_FAMILIES = ["Segoe UI Variable Text", "Segoe UI", "Inter", "Arial", "sans-serif"]
+FONT_FAMILIES = ["Segoe UI Variable Text", "Segoe UI", "Arial", "sans-serif"]
 FONT_FAMILIES_CSS = ", ".join(f'"{f}"' for f in FONT_FAMILIES[:-1]) + ", sans-serif"
+
+# Windows ships Segoe UI Variable in three optical sizes, and they are not
+# the same typeface at different scales: Text is drawn for small sizes with
+# open apertures and loose spacing, Display is drawn for large sizes with
+# tighter spacing and finer detail. Using Display above 17px is a real
+# typographic decision that costs nothing and is native to the platform -
+# unlike downloading whichever grotesk is currently fashionable.
+FONT_FAMILIES_DISPLAY = [
+    "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI",
+    "Arial", "sans-serif",
+]
+FONT_FAMILIES_DISPLAY_CSS = (
+    ", ".join(f'"{f}"' for f in FONT_FAMILIES_DISPLAY[:-1]) + ", sans-serif"
+)
+# At and above this size a role is set in the Display optical cut.
+DISPLAY_SIZE_THRESHOLD = 17
 FONT_FAMILIES_MONO = ["Cascadia Mono", "Consolas", "Courier New", "monospace"]
 FONT_FAMILIES_MONO_CSS = (
     ", ".join(f'"{f}"' for f in FONT_FAMILIES_MONO[:-1]) + ", monospace"
@@ -150,14 +168,19 @@ WEIGHT_SEMIBOLD = 600
 WEIGHT_BOLD = 700
 
 # The size ramp. Every text style below resolves to one of these.
+# The ramp. The previous one ran 11/12/13/14/16/19/24, where body (13) to
+# subheading (14) is a ratio of 1.08 - a difference nobody can see, which
+# is why the old hierarchy was carried by nothing. These steps widen once
+# they leave the dense-metadata cluster: a subject line is now 22px
+# against 13px body, a ratio of 1.7.
 SIZE_2XS = 10
 SIZE_XS = 11
 SIZE_SM = 12
 SIZE_MD = 13
-SIZE_LG = 14
-SIZE_XL = 16
-SIZE_2XL = 19
-SIZE_3XL = 24
+SIZE_LG = 15
+SIZE_XL = 18
+SIZE_2XL = 22
+SIZE_3XL = 28
 
 # role -> (size, weight, letter-spacing px | None)
 #
@@ -166,10 +189,10 @@ SIZE_3XL = 24
 # answer is a one-line edit here rather than a search across widgets.
 TYPOGRAPHY: dict[str, tuple[int, int, float | None]] = {
     # Structural
-    "display":          (SIZE_3XL, WEIGHT_SEMIBOLD, -0.2),
-    "title":            (SIZE_2XL, WEIGHT_SEMIBOLD, -0.1),
-    "heading":          (SIZE_XL, WEIGHT_SEMIBOLD, None),
-    "subheading":       (SIZE_LG, WEIGHT_SEMIBOLD, None),
+    "display":          (SIZE_3XL, WEIGHT_SEMIBOLD, -0.5),
+    "title":            (SIZE_2XL, WEIGHT_SEMIBOLD, -0.35),
+    "heading":          (SIZE_XL, WEIGHT_SEMIBOLD, -0.2),
+    "subheading":       (SIZE_LG, WEIGHT_SEMIBOLD, -0.1),
     "overline":         (SIZE_2XS, WEIGHT_BOLD, 0.9),
     # Body
     "body":             (SIZE_MD, WEIGHT_REGULAR, None),
@@ -194,8 +217,8 @@ TYPOGRAPHY: dict[str, tuple[int, int, float | None]] = {
     "preview":          (SIZE_SM, WEIGHT_REGULAR, None),
     "timestamp":        (SIZE_XS, WEIGHT_REGULAR, None),
     # Compatibility aliases for the pre-redesign role names.
-    "app_title":        (SIZE_XL, WEIGHT_SEMIBOLD, -0.1),
-    "dialog_heading":   (SIZE_XL, WEIGHT_SEMIBOLD, None),
+    "app_title":        (SIZE_XL, WEIGHT_SEMIBOLD, -0.2),
+    "dialog_heading":   (SIZE_XL, WEIGHT_SEMIBOLD, -0.2),
     "section_label":    (SIZE_2XS, WEIGHT_BOLD, 0.9),
     "account_label":    (SIZE_MD, WEIGHT_MEDIUM, None),
 }
@@ -205,7 +228,13 @@ def make_font(preset: str, *, italic: bool = False, mono: bool = False) -> QFont
     """Build a QFont for a named TYPOGRAPHY role."""
     size, weight, spacing = TYPOGRAPHY[preset]
     font = QFont()
-    font.setFamilies(FONT_FAMILIES_MONO if mono else FONT_FAMILIES)
+    if mono:
+        families = FONT_FAMILIES_MONO
+    elif size >= DISPLAY_SIZE_THRESHOLD:
+        families = FONT_FAMILIES_DISPLAY
+    else:
+        families = FONT_FAMILIES
+    font.setFamilies(families)
     font.setPixelSize(size)
     font.setWeight(QFont.Weight(weight))
     if spacing is not None:

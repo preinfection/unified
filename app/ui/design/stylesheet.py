@@ -50,9 +50,14 @@ _QSS = r"""
 /* ===================================================================
    Base
    =================================================================== */
+/* No font-family or font-size here, deliberately.
+   A Qt stylesheet's font declarations *override* every QFont set in
+   code, so a `* { font-size: 13px }` rule silently flattens the whole
+   type ramp: every heading, subject line and dialog title set through
+   make_font() renders at 13px and the hierarchy disappears. The base
+   font is installed with QApplication.setFont() instead (see
+   ThemeManager.apply), which per-widget fonts can still override. */
 * {
-    font-family: $font_family;
-    font-size: ${size_md}px;
     color: $text_primary;
     outline: none;
 }
@@ -82,13 +87,30 @@ QLabel[role="overline"] {
 QLabel:disabled { color: $text_disabled; }
 
 /* ===================================================================
-   Buttons - one control, five appearances, selected by property
+   Buttons
+
+   Every Button in components/buttons.py paints its own surface, because
+   Qt Style Sheets have no `transition` and a button that cannot animate
+   cannot feel like anything. The rules here deliberately draw *nothing*
+   for those - they only strip Qt's own chrome so the custom paint is not
+   fighting a second background underneath it.
+
+   QToolButton and any bare QPushButton that has not opted in still get a
+   full stylesheet treatment, so a control added without the component
+   still looks like it belongs.
    =================================================================== */
+QPushButton[painted="true"], QToolButton[painted="true"] {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: $text_primary;
+}
+
 QPushButton, QToolButton {
     background: $surface;
     border: ${stroke_thin}px solid $border_strong;
     border-radius: ${radius_sm}px;
-    padding: 0 ${space_lg}px;
+    padding: 0 ${space_xl}px;
     min-height: ${control_md}px;
     color: $text_primary;
     font-weight: $weight_semibold;
@@ -104,165 +126,39 @@ QPushButton:disabled, QToolButton:disabled {
     border-color: $border;
     background: $surface;
 }
-
-QPushButton[variant="primary"] {
-    background: $accent_solid;
-    color: $text_on_accent;
-    border: ${stroke_thin}px solid $accent_solid;
-}
-QPushButton[variant="primary"]:hover {
-    background: $accent_solid_hover;
-    border-color: $accent_solid_hover;
-}
-QPushButton[variant="primary"]:pressed {
-    background: $accent_solid_pressed;
-    border-color: $accent_solid_pressed;
-}
-QPushButton[variant="primary"]:disabled {
-    background: $surface_active;
-    color: $text_disabled;
-    border-color: $border;
-}
-
-QPushButton[variant="danger"] {
-    background: $danger_strong;
-    color: $text_on_accent;
-    border: ${stroke_thin}px solid $danger_strong;
-}
-QPushButton[variant="danger"]:hover { background: $danger_fg; border-color: $danger_fg; }
-QPushButton[variant="danger"]:pressed { background: $danger_strong; }
-QPushButton[variant="danger"]:disabled {
-    background: $surface_active;
-    color: $text_disabled;
-    border-color: $border;
-}
-
-/* A destructive action that is not the point of the screen. On a
-   settings page a solid red button out-shouts Save, which is the button
-   the user is actually there to press. */
-QPushButton[variant="danger_quiet"] {
-    background: transparent;
-    color: $danger_fg;
-    border: ${stroke_thin}px solid $border_strong;
-}
-QPushButton[variant="danger_quiet"]:hover {
-    background: $danger_bg;
-    border-color: $danger_fg;
-}
-QPushButton[variant="danger_quiet"]:pressed { background: $danger_bg; }
-QPushButton[variant="danger_quiet"]:disabled {
-    color: $text_disabled;
-    border-color: $border;
-    background: transparent;
-}
-
-QPushButton[variant="subtle"], QToolButton[variant="subtle"] {
+QToolButton[variant="subtle"] {
     background: transparent;
     border: ${stroke_thin}px solid transparent;
     color: $text_secondary;
     font-weight: $weight_medium;
 }
-QPushButton[variant="subtle"]:hover, QToolButton[variant="subtle"]:hover {
-    background: $surface_hover;
-    color: $text_primary;
-}
-QPushButton[variant="subtle"]:pressed, QToolButton[variant="subtle"]:pressed {
-    background: $surface_active;
-}
-QPushButton[variant="subtle"]:checked, QToolButton[variant="subtle"]:checked {
-    background: $accent_subtle;
-    color: $accent_fg;
-    border-color: $accent;
-}
-QPushButton[variant="subtle"]:focus, QToolButton[variant="subtle"]:focus {
-    border-color: $focus_ring;
-}
-QPushButton[variant="subtle"]:disabled, QToolButton[variant="subtle"]:disabled {
-    color: $text_disabled;
-    background: transparent;
-}
-
-QPushButton[variant="link"] {
-    background: transparent;
-    border: ${stroke_thin}px solid transparent;
-    color: $accent_fg;
-    padding: 0 ${space_xs}px;
-    font-weight: $weight_semibold;
-}
-QPushButton[variant="link"]:hover { color: $accent_hover; text-decoration: underline; }
-QPushButton[variant="link"]:focus { border-color: $focus_ring; }
-QPushButton[variant="link"]:disabled { color: $text_disabled; }
-
-/* Icon-only actions: square, no label, no padding asymmetry. */
-QPushButton[shape="icon"], QToolButton[shape="icon"] {
+QToolButton[variant="subtle"]:hover { background: $surface_hover; color: $text_primary; }
+QToolButton[variant="subtle"]:pressed { background: $surface_active; }
+QToolButton[shape="icon"] {
     padding: 0;
     min-width: ${control_md}px;
     max-width: ${control_md}px;
     min-height: ${control_md}px;
     max-height: ${control_md}px;
-    background: transparent;
-    border: ${stroke_thin}px solid transparent;
 }
-QPushButton[shape="icon"]:hover, QToolButton[shape="icon"]:hover {
-    background: $surface_hover;
-}
-QPushButton[shape="icon"]:pressed, QToolButton[shape="icon"]:pressed {
-    background: $surface_active;
-}
-QPushButton[shape="icon"]:checked, QToolButton[shape="icon"]:checked {
-    background: $accent_subtle;
-    border-color: $accent;
-}
-QPushButton[shape="icon"]:focus, QToolButton[shape="icon"]:focus {
-    border-color: $focus_ring;
+QToolButton[shape="icon"][size="sm"] {
+    min-width: ${control_sm}px; max-width: ${control_sm}px;
+    min-height: ${control_sm}px; max-height: ${control_sm}px;
 }
 
-/* Keyboard focus. Installed by components/focus.py so it appears for
-   Tab/shortcut focus but not for a plain mouse click. The extra border
-   pixel is paid for out of the padding, so nothing on the row moves. */
-QPushButton[kbfocus="true"], QToolButton[kbfocus="true"],
+/* Keyboard focus on the controls that are *not* self-painted. The painted
+   ones draw a ring outside their own rect, which is why nothing here
+   moves when it appears. */
 QLineEdit[kbfocus="true"], QPlainTextEdit[kbfocus="true"],
 QTextEdit[kbfocus="true"], QSpinBox[kbfocus="true"],
 QComboBox[kbfocus="true"], QCheckBox[kbfocus="true"] {
     border: ${stroke_focus}px solid $focus_ring;
 }
-QPushButton[kbfocus="true"] { padding: 0 ${space_sm}px; }
-QPushButton[shape="icon"][kbfocus="true"],
-QToolButton[shape="icon"][kbfocus="true"] { padding: 0; }
 QLineEdit[kbfocus="true"], QSpinBox[kbfocus="true"], QComboBox[kbfocus="true"] {
     padding: 0 ${space_sm}px;
 }
 QListView[kbfocus="true"], QListWidget[kbfocus="true"],
 QTreeWidget[kbfocus="true"] { border: ${stroke_focus}px solid $focus_ring; }
-
-/* An icon-only *primary* action is still the primary action. Without
-   this the generic icon rule below would strip Compose of its fill the
-   moment the window got narrow enough to drop its label. */
-QPushButton[variant="primary"][shape="icon"] {
-    background: $accent_solid;
-    border-color: $accent_solid;
-}
-QPushButton[variant="primary"][shape="icon"]:hover {
-    background: $accent_solid_hover;
-    border-color: $accent_solid_hover;
-}
-QPushButton[variant="primary"][shape="icon"]:pressed {
-    background: $accent_solid_pressed;
-}
-
-QPushButton[size="sm"], QToolButton[size="sm"] {
-    min-height: ${control_sm}px;
-    padding: 0 ${space_md}px;
-    font-size: ${size_sm}px;
-}
-QPushButton[size="lg"] {
-    min-height: ${control_lg}px;
-    padding: 0 ${space_xl}px;
-}
-QPushButton[shape="icon"][size="sm"], QToolButton[shape="icon"][size="sm"] {
-    min-width: ${control_sm}px; max-width: ${control_sm}px;
-    min-height: ${control_sm}px; max-height: ${control_sm}px;
-}
 
 /* ===================================================================
    Text inputs

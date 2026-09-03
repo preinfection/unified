@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui import theme as t
+from app.ui.design import motion
 from app.ui.svg_icon import themed, themed_pixmap
 
 _POPUP_MAX_VISIBLE = 10
@@ -108,18 +109,22 @@ class _DropdownPopup(QWidget):
         event.accept()
 
     def show_animated(self, target: QPoint) -> None:
-        duration = t.duration(t.DURATION_BASE)
+        duration = t.duration(motion.DROPDOWN_OPEN)
         if not duration:
             self.move(target)
             self.show()
             return
-        start = QPoint(target.x(), target.y() - 6)
+        # Rises the last few pixels into place from the trigger's side,
+        # which is the flat-plane stand-in for scaling from a transform
+        # origin: Qt popups are separate windows and cannot be scaled
+        # about a point in the parent.
+        start = QPoint(target.x(), target.y() - motion.DISTANCE_BASE)
         self.move(start)
         self.setWindowOpacity(0.0)
         self.show()
         self._pos_anim = QPropertyAnimation(self, b"pos", self)
         self._pos_anim.setDuration(duration)
-        self._pos_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._pos_anim.setEasingCurve(motion.EASE_SMOOTH_OUT)
         self._pos_anim.setStartValue(start)
         self._pos_anim.setEndValue(target)
         self._pos_anim.start()

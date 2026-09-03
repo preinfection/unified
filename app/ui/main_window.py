@@ -41,9 +41,10 @@ from __future__ import annotations
 import json
 import logging
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
     QLabel,
     QMainWindow,
     QMenu,
@@ -77,6 +78,7 @@ from app.services.sync_service import (
 )
 from app.ui import theme as t
 from app.ui.account_dialog import AccountDialog
+from app.ui.design import motion
 from app.ui.components.buttons import Button, refresh_button_icons
 from app.ui.components.command_bar import CommandBar
 from app.ui.components.dialog import confirm, notify
@@ -461,8 +463,40 @@ class MainWindow(QMainWindow):
             self.panes.widget(1).setVisible(True)
             self.preview.setVisible(True)
             return
+        incoming = self.preview if self._reading else self.panes.widget(1)
         self.panes.widget(1).setVisible(not self._reading)
         self.preview.setVisible(self._reading)
+        self._slide_in(incoming, forward=self._reading)
+
+    def _slide_in(self, pane, *, forward: bool) -> None:
+        """Slide a pane in from the direction it is travelling from.
+
+        Forward (list -> message) enters from the right; Back enters from
+        the left. Same distance and duration either way, so the return
+        journey retraces the outbound one.
+        """
+        duration = t.duration(motion.PAGE_SLIDE)
+        if duration <= 0:
+            return
+        effect = QGraphicsOpacityEffect(pane)
+        pane.setGraphicsEffect(effect)
+        offset = motion.DISTANCE_BASE * (1 if forward else -1)
+        origin = pane.pos()
+
+        animation = QVariantAnimation(pane)
+        animation.setDuration(duration)
+        animation.setEasingCurve(motion.EASE_SMOOTH_OUT)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.0)
+
+        def step(value):
+            progress = float(value)
+            effect.setOpacity(1.0 - progress)
+            pane.move(origin.x() + int(offset * progress), origin.y())
+
+        animation.valueChanged.connect(step)
+        animation.finished.connect(lambda: pane.setGraphicsEffect(None))
+        animation.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _back_to_list(self) -> None:
         self._reading = False

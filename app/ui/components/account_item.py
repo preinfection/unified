@@ -19,12 +19,14 @@ Two decisions worth naming:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app.ui import theme as t
 from app.ui.components.avatar import Avatar
+from app.ui.design import motion
+from app.ui.design.motion import StateAnimator, blend
 from app.ui.components.badge import CountBadge, StatusDot
 
 
@@ -37,7 +39,9 @@ class AccountItem(QWidget):
         self.email = account["email"]
         self._selected = False
         self.setObjectName("accountItem")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._anim = StateAnimator(
+            self, hover=motion.DURATION_HOVER, select=motion.DURATION_STATE,
+        )
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # Required for the QSS :hover pseudo-state to fire on a bare QWidget.
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -85,6 +89,27 @@ class AccountItem(QWidget):
             metrics.elidedText(self.email, Qt.TextElideMode.ElideLeft, available)
         )
 
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._anim.to("hover", 1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._anim.to("hover", 0.0, exiting=True)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = t.theme_manager.palette
+        clear = QColor(0, 0, 0, 0)
+        fill = blend(clear, QColor(palette.surface_hover), self._anim["hover"])
+        fill = blend(fill, QColor(palette.selected), self._anim["select"])
+        if fill.alpha():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(QRectF(self.rect()), t.RADIUS_MD, t.RADIUS_MD)
+        painter.end()
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self.account_id)
@@ -103,7 +128,7 @@ class AccountItem(QWidget):
         if selected == self._selected:
             return
         self._selected = selected
-        t.set_variant(self, "state", "selected" if selected else None)
+        self._anim.to("select", 1.0 if selected else 0.0, exiting=not selected)
         self._badge.set_tone("accent" if selected and self._badge.text() else "quiet")
 
     def set_unread(self, count: int) -> None:
