@@ -373,6 +373,7 @@ class Database:
         account_id: Optional[int] = None,
         starred_only: bool = False,
         search: str = "",
+        unread_only: bool = False,
     ) -> int:
         """Count with the same filters as list_emails (for 'showing X of Y')."""
         clauses: list[str] = []
@@ -392,6 +393,8 @@ class Database:
                 " OR snippet LIKE ? OR body_text LIKE ?)"
             )
             params += [like, like, like, like, like]
+        if unread_only:
+            clauses.append("is_read = 0")
         row = self._connect().execute(
             f"SELECT COUNT(*) AS n FROM emails WHERE {' AND '.join(clauses)}",
             params,
@@ -412,6 +415,7 @@ class Database:
         starred_only: bool = False,
         search: str = "",
         limit: int = 500,
+        unread_only: bool = False,
     ) -> list[dict]:
         """Query the unified message list, newest first."""
         clauses: list[str] = []
@@ -431,6 +435,12 @@ class Database:
                 " OR e.snippet LIKE ? OR e.body_text LIKE ?)"
             )
             params += [like, like, like, like, like]
+        if unread_only:
+            # The list header's "Unread" filter. Applied in SQL rather than
+            # by filtering the returned page, so the display limit still
+            # counts unread messages rather than counting rows that are
+            # then thrown away.
+            clauses.append("e.is_read = 0")
         sql = (
             "SELECT e.*, a.email AS account_email FROM emails e"
             " JOIN accounts a ON a.id = e.account_id"
@@ -456,6 +466,38 @@ class Database:
                 "UPDATE emails SET is_read = ? WHERE id = ?",
                 (1 if is_read else 0, email_id),
             )
+
+    def mark_all_read(
+        self,
+        folder: str = "inbox",
+        account_id: Optional[int] = None,
+        starred_only: bool = False,
+    ) -> list[dict]:
+        """Mark every cached message in the current view as read.
+
+        Returns the rows that actually changed - the caller needs their
+        uid/folder/account to mirror the change on the server, and needs
+        to know that a message already read produced no work.
+        """
+        clauses: list[str] = ["is_read = 0"]
+        params: list[Any] = []
+        if starred_only:
+            clauses.append("is_starred = 1 AND folder != 'trash'")
+        else:
+            clauses.append("folder = ?")
+            params.append(folder)
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(account_id)
+        where = " AND ".join(clauses)
+        conn = self._connect()
+        rows = conn.execute(
+            f"SELECT id, account_id, uid, folder FROM emails WHERE {where}", params
+        ).fetchall()
+        if rows:
+            with conn:
+                conn.execute(f"UPDATE emails SET is_read = 1 WHERE {where}", params)
+        return [dict(r) for r in rows]
 
     def set_starred(self, email_id: int, starred: bool) -> None:
         conn = self._connect()

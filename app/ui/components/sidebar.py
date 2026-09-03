@@ -1,48 +1,57 @@
-"""The account drawer: app masthead, folder navigation pills, then a
-scrollable list of connected accounts with live status, then Add account /
-Settings.
+"""The navigation column.
 
-Rebuilding the account list (set_accounts) is only done when the account
-set actually changes (added/removed) - routine sync progress updates go
-through the much cheaper update_account_status(), which touches exactly
-one existing AccountItem instead of rebuilding the drawer. This matters
-because progress ticks can arrive several times a second while syncing.
+Its whole job is answering "where am I, and where else can I go" without
+being read. So it is organised as two clearly different kinds of thing,
+never mixed:
+
+* **Mailboxes** - the four views (Unified Inbox, Starred, Sent, Trash).
+  These are places.
+* **Accounts** - the connected addresses. These are *filters* on the
+  place you are in.
+
+The pre-redesign sidebar let a folder and an account both look like a
+selected pill, which made "Inbox, filtered to this account" and "the
+account's inbox" visually identical states, and left no way to tell which
+one you were in. Now exactly one of the two groups can be active at a
+time and the active one is marked with an accent bar, while a scope line
+under the header states the current combination in words.
+
+At narrow window widths the whole column collapses to a 56px icon rail -
+labels and the account list drop out, the icons and their tooltips stay,
+and the reading pane gets the width instead. That is handled by
+`set_collapsed`, which the shell calls from its resize handler.
+
+Rebuilding the account list (`set_accounts`) happens only when the set of
+accounts actually changes. Routine sync progress goes through
+`update_account_status`, which touches one existing row - progress ticks
+arrive several times a second, and rebuilding the drawer on each one is
+real UI-thread work during exactly the window the app most needs to stay
+responsive.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from app import APP_NAME
 from app.ui import theme as t
 from app.ui.components.account_item import AccountItem
+from app.ui.components.buttons import Button, IconButton
 from app.ui.components.nav_pill import NavPill
 from app.ui.components.section_header import SectionHeader
-from app.ui.svg_icon import simple_icon, icon_set
 
 VIEW_ITEMS = [
-    ("inbox", "Unified Inbox", "inbox"),
-    ("starred", "Starred", "starred_nav"),
+    ("inbox", "Inbox", "inbox"),
+    ("starred", "Starred", "star_outline"),
     ("sent", "Sent", "sent"),
     ("trash", "Trash", "trash"),
 ]
-
-
-def _nav_icon(name: str):
-    return icon_set(
-        name, t.ICON_SIZE_NAV,
-        normal=t.ICON_SECONDARY, active=t.ICON_ACTIVE, selected=t.ICON_SELECTED,
-    )
 
 
 class SidebarWidget(QWidget):
@@ -55,100 +64,116 @@ class SidebarWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("sidebar")
         self.setFixedWidth(t.SIDEBAR_WIDTH)
+        self.setAccessibleName("Mailbox navigation")
 
         self._account_items: dict[int, AccountItem] = {}
         self._current_view: str | None = "inbox"
         self._current_account_id: int | None = None
+        self._collapsed = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(t.SPACE_SM, t.SPACE_MD, t.SPACE_SM, t.SPACE_MD)
-        root.setSpacing(t.SPACE_XXS)
+        root.setContentsMargins(t.SPACE_MD, t.SPACE_LG, t.SPACE_MD, t.SPACE_MD)
+        root.setSpacing(t.SPACE_2XS)
 
-        root.addLayout(self._build_masthead())
-        root.addSpacing(t.SPACE_LG)
+        # -- mailboxes
+        self._mailbox_header = SectionHeader("Mailboxes")
+        root.addWidget(self._mailbox_header)
+        root.addSpacing(t.SPACE_XS)
 
-        self._nav_buttons: dict[str, QPushButton] = {}
+        self._nav_buttons: dict[str, NavPill] = {}
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         for view, label, icon_name in VIEW_ITEMS:
-            btn = NavPill(f"  {label}")
-            btn.setFont(t.make_font("nav_label"))
-            btn.setIcon(_nav_icon(icon_name))
-            btn.setIconSize(QSize(t.ICON_SIZE_NAV, t.ICON_SIZE_NAV))
-            btn.clicked.connect(lambda _=False, v=view: self._on_nav_clicked(v))
-            self._nav_group.addButton(btn)
-            self._nav_buttons[view] = btn
-            root.addWidget(btn)
+            button = NavPill(label, icon=icon_name)
+            button.setFixedHeight(t.TAB_HEIGHT + t.SPACE_SM)
+            button.setToolTip(label)
+            button.clicked.connect(lambda _=False, v=view: self._on_nav_clicked(v))
+            self._nav_group.addButton(button)
+            self._nav_buttons[view] = button
+            root.addWidget(button)
 
-        root.addSpacing(t.SPACE_LG)
-        root.addWidget(SectionHeader("Accounts"))
-        root.addSpacing(t.SPACE_XXS)
+        root.addSpacing(t.SPACE_XL)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._accounts_container = QWidget()
-        self._accounts_layout = QVBoxLayout(self._accounts_container)
+        # -- accounts
+        self._add_button = IconButton(
+            "add_circle", "Add an email account", size="sm"
+        )
+        self._add_button.clicked.connect(self.add_account_requested.emit)
+        self._accounts_header = SectionHeader("Accounts", action=self._add_button)
+        root.addWidget(self._accounts_header)
+        root.addSpacing(t.SPACE_XS)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        container = QWidget()
+        self._accounts_layout = QVBoxLayout(container)
         self._accounts_layout.setContentsMargins(0, 0, 0, 0)
-        self._accounts_layout.setSpacing(2)
+        self._accounts_layout.setSpacing(t.SPACE_2XS)
         self._accounts_layout.addStretch(1)
-        scroll.setWidget(self._accounts_container)
-        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        root.addWidget(scroll, stretch=1)
+        self._scroll.setWidget(container)
+        self._scroll.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
+        root.addWidget(self._scroll, stretch=1)
 
-        add_btn = QPushButton("  Add account...")
-        add_btn.setObjectName("navPill")
-        add_btn.setFont(t.make_font("nav_label"))
-        add_btn.setFlat(True)
-        add_btn.setIcon(_nav_icon("add_circle"))
-        add_btn.setIconSize(QSize(t.ICON_SIZE_NAV, t.ICON_SIZE_NAV))
-        add_btn.clicked.connect(self.add_account_requested.emit)
-        root.addWidget(add_btn)
+        # When the account list is hidden (icon rail), something still has
+        # to absorb the leftover height - otherwise the layout hands it to
+        # the navigation rows and they drift apart down the column.
+        self._rail_spacer = QWidget()
+        self._rail_spacer.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
+        self._rail_spacer.setVisible(False)
+        root.addWidget(self._rail_spacer, stretch=1)
 
-        settings_btn = QPushButton("  Settings")
-        settings_btn.setObjectName("navPill")
-        settings_btn.setFont(t.make_font("nav_label"))
-        settings_btn.setFlat(True)
-        settings_btn.setIcon(_nav_icon("settings"))
-        settings_btn.setIconSize(QSize(t.ICON_SIZE_NAV, t.ICON_SIZE_NAV))
-        settings_btn.clicked.connect(self.settings_requested.emit)
-        root.addWidget(settings_btn)
+        # -- footer
+        self._settings_button = Button(
+            "Settings", variant="subtle", icon="settings", size="sm",
+            tooltip="Settings (Ctrl+,)",
+        )
+        self._settings_button.setObjectName("navItem")
+        self._settings_button.setFixedHeight(t.TAB_HEIGHT + t.SPACE_SM)
+        self._settings_button.clicked.connect(self.settings_requested.emit)
+        root.addWidget(self._settings_button)
 
         self._nav_buttons["inbox"].setChecked(True)
 
-    # --------------------------------------------------------------- header
+    # ------------------------------------------------------------ collapse
 
-    def _build_masthead(self) -> QHBoxLayout:
-        """App identity + a quiet "your mail is encrypted locally" cue -
-        the one place the product states its privacy premise, once, without
-        turning the whole sidebar into a badge wall."""
-        row = QHBoxLayout()
-        row.setContentsMargins(t.SPACE_XS, t.SPACE_XS, t.SPACE_XS, 0)
-        row.setSpacing(t.SPACE_SM)
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Icon rail at narrow widths: the reading pane needs the space
+        more than the account list does."""
+        if collapsed == self._collapsed:
+            return
+        self._collapsed = collapsed
+        self.setFixedWidth(t.SIDEBAR_RAIL_WIDTH if collapsed else t.SIDEBAR_WIDTH)
+        self._mailbox_header.setVisible(not collapsed)
+        self._accounts_header.setVisible(not collapsed)
+        self._scroll.setVisible(not collapsed)
+        self._rail_spacer.setVisible(collapsed)
+        for view, label, _icon in VIEW_ITEMS:
+            button = self._nav_buttons[view]
+            button.setText("" if collapsed else label)
+            button.badge.setVisible(not collapsed and bool(button.badge.text()))
+        self._settings_button.setText("" if collapsed else "Settings")
+        self._settings_button.setProperty("shape", "icon" if collapsed else None)
+        t.repolish(self._settings_button)
 
-        title_col = QVBoxLayout()
-        title_col.setSpacing(0)
-        name = QLabel(APP_NAME)
-        name.setFont(t.make_font("app_title"))
-        name.setStyleSheet(f"color: {t.TEXT_PRIMARY};")
-        caption = QLabel("Encrypted locally")
-        caption.setFont(t.make_font("caption"))
-        caption.setStyleSheet(f"color: {t.TEXT_TERTIARY};")
-        title_col.addWidget(name)
-        title_col.addWidget(caption)
-        row.addLayout(title_col)
-        row.addStretch(1)
+    @property
+    def is_collapsed(self) -> bool:
+        return self._collapsed
 
-        lock = QLabel()
-        lock.setPixmap(simple_icon("lock", 15, t.SECURE).pixmap(15, 15))
-        lock.setToolTip(
-            "The local mailbox cache is encrypted at rest (AES-256-GCM)."
-        )
-        row.addWidget(lock, alignment=Qt.AlignmentFlag.AlignVCenter)
-        return row
+    def refresh_icons(self) -> None:
+        for button in self._nav_buttons.values():
+            button.refresh_icon()
+        self._add_button.refresh_icon()
+        self._settings_button.refresh_icon()
 
-    # ------------------------------------------------------------------ nav
+    # ----------------------------------------------------------------- nav
 
     def _on_nav_clicked(self, view: str) -> None:
         self._current_view = view
@@ -158,15 +183,18 @@ class SidebarWidget(QWidget):
         self.view_selected.emit(view)
 
     def set_inbox_count(self, total_unread: int) -> None:
-        label = "  Unified Inbox"
-        if total_unread:
-            label += f"  ({total_unread})"
-        self._nav_buttons["inbox"].setText(label)
+        self._nav_buttons["inbox"].set_count(total_unread)
 
-    # -------------------------------------------------------------- accounts
+    def set_view_counts(self, counts: dict[str, int]) -> None:
+        for view, count in counts.items():
+            button = self._nav_buttons.get(view)
+            if button is not None:
+                button.set_count(count)
+
+    # ------------------------------------------------------------ accounts
 
     def set_accounts(self, accounts: list[dict], per_account_unread: dict) -> None:
-        """Full rebuild - call only when the account set itself changed."""
+        """Full rebuild - only when the account set itself changed."""
         for item in self._account_items.values():
             item.setParent(None)
             item.deleteLater()
@@ -192,30 +220,26 @@ class SidebarWidget(QWidget):
             item.set_unread(per_account_unread.get(account_id, 0))
 
     def _on_account_clicked(self, account_id: int) -> None:
-        self._current_view = None
         self._current_account_id = account_id
         for aid, item in self._account_items.items():
             item.set_selected(aid == account_id)
-        for btn in self._nav_buttons.values():
-            btn.setAutoExclusive(False)
-            btn.setChecked(False)
-            btn.setAutoExclusive(True)
+        # An account is a filter on the current mailbox, not a place of
+        # its own, so the mailbox stays selected while it is applied.
         self.account_selected.emit(account_id)
 
     # -------------------------------------------------------------- external
 
     def set_current(self, view: str | None, account_id: int | None) -> None:
-        """Sync visual selection state without emitting signals - used when
-        MainWindow drives the selection (e.g. jumping to a newly added
-        account) rather than the user clicking here."""
+        """Reflect a selection driven by the shell (e.g. jumping to a
+        newly added account) without emitting signals back at it."""
         self._current_view = view
         self._current_account_id = account_id
         if view is not None and view in self._nav_buttons:
             self._nav_buttons[view].setChecked(True)
         else:
-            for btn in self._nav_buttons.values():
-                btn.setAutoExclusive(False)
-                btn.setChecked(False)
-                btn.setAutoExclusive(True)
+            for button in self._nav_buttons.values():
+                button.setAutoExclusive(False)
+                button.setChecked(False)
+                button.setAutoExclusive(True)
         for aid, item in self._account_items.items():
             item.set_selected(aid == account_id)

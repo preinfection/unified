@@ -1,79 +1,132 @@
-"""Virtualized email list: QAbstractListModel + QStyledItemDelegate +
-QListView, instead of one QTreeWidgetItem per row.
+"""The message list: a virtualized QListView with a painted row delegate.
 
-This is the one part of the redesign with real performance stakes -
-mailboxes here run to 10,000+ cached messages. A delegate paints each
-visible row directly (avatar circle, sender, subject/snippet, time,
-unread dot, account label) with zero QWidget instances created per row;
-Qt only ever constructs paint calls for rows actually on screen. Model
-resets are the only "rebuild" cost, and reselecting the previously
-current row after a reset is done with the selection model's signals
-blocked so it never re-triggers the read-marking/body-fetch side effects
-in MainWindow - the exact same guard the old QTreeWidget code used.
+This is the surface with real performance stakes - cached mailboxes here
+run past 10,000 messages - so there is no widget per row. A delegate
+paints each visible row directly and Qt only ever asks it to paint what
+is on screen. Model resets are the only rebuild cost, and reselecting the
+previously current row after a reset happens with the selection model's
+signals blocked so it never re-triggers read-marking or a body fetch.
 
-Date-grouped section headers ("Today" / "Yesterday" / "Earlier") are
-synthetic rows injected into the same flat model rather than a second
-widget or a tree - they cost one extra dict per group (never per
-message), carry no selectable flag, and the delegate paints them with a
-distinct, shorter row height. Virtualization is untouched: Qt still only
-ever asks the delegate to paint what's on screen.
+The row itself is the redesign's most-considered piece of layout:
+
+    ┌──┬────┬──────────────────────────────────────────┐
+    │● │ AV │ Sender name                        14:32  │
+    │  │    │ Subject line                        ★ ⏎  │
+    │  │    │ Preview text, one line, elided…  account  │
+    └──┴────┴──────────────────────────────────────────┘
+
+* The unread dot lives in its own fixed gutter, so read and unread rows
+  align on the same left edge. (Previously the dot was inline, which
+  shifted every unread sender name 10px right and made a mixed list look
+  ragged down the middle.)
+* Unread is carried by *three* signals - the dot, a heavier sender
+  weight, and full-strength text - so it survives both a glance and a
+  color-vision difference. Read rows drop to secondary text rather than
+  changing hue.
+* Subject and preview are separate lines rather than one string joined by
+  a dash: the dash version elides the preview and the subject together,
+  so a long subject silently ate the preview.
+* The account address appears on the third line only when more than one
+  account is in view. In a unified inbox, "which of my addresses received
+  this" is information; in a single-account view it is noise.
+* Selection pairs a tinted fill with a leading accent bar. Fill alone at a
+  glance is indistinguishable from hover, which is the difference between
+  "the pointer is here" and "this is what you are reading".
+
+Date-group headers are synthetic rows in the same flat model rather than
+a second widget or a tree: one extra dict per group, never per message,
+and virtualization is untouched.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QStyleOptionViewItem
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QModelIndex,
+    QRectF,
+    QSize,
+    Qt,
+    Signal,
+)
+from PySide6.QtGui import QFontMetrics, QPainter, QPen
+from PySide6.QtWidgets import (
+    QListView,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+)
 
 from app.ui import theme as t
 from app.ui.components.avatar import paint_avatar
 from app.ui.svg_icon import tinted_pixmap
 
-# Denser than before, following the reference's compact row rhythm while
-# staying readable for two lines of real email metadata.
-ROW_HEIGHT = 58
-HEADER_HEIGHT = 30
-_AVATAR_SIZE = 32
+# The default density's row height, kept as a module constant because the
+# delegate, the skeleton loader and the tests all need to agree on it.
+# `t.row_height()` is the live value once the user picks a density.
+ROW_HEIGHT = t.DENSITY_METRICS[t.DENSITY_DEFAULT][0]
+HEADER_HEIGHT = t.GROUP_HEADER_HEIGHT
+COMPACT_ROW_HEIGHT = t.DENSITY_METRICS[t.DENSITY_COMPACT][0]
+
+_AVATAR = t.AVATAR_MD
+_GUTTER = 16          # unread-dot column; keeps read/unread rows aligned
+_DOT = 7
+_PAD_X = 10
+_ICON = t.ICON_XS + 1
+
 ROLE_MSG = Qt.ItemDataRole.UserRole
 
 
 def format_time(ts: int) -> str:
+    """Timestamps shorten as they age - the closer a message is, the more
+    precisely a person wants it placed."""
     if not ts:
         return ""
     dt = datetime.fromtimestamp(ts)
     now = datetime.now()
     if dt.date() == now.date():
         return dt.strftime("%H:%M")
+    if (now.date() - dt.date()).days == 1:
+        return "Yesterday"
     if dt.year == now.year:
         return dt.strftime("%d %b")
     return dt.strftime("%d %b %Y")
 
 
-def _date_bucket(ts: int, today: date, yesterday: date) -> str:
+def format_full_time(ts: int) -> str:
+    if not ts:
+        return ""
+    return datetime.fromtimestamp(ts).strftime("%a, %d %b %Y at %H:%M")
+
+
+def _date_bucket(ts: int, today: date) -> str:
     d = datetime.fromtimestamp(ts).date() if ts else today
-    if d == today:
+    delta = (today - d).days
+    if delta <= 0:
         return "Today"
-    if d == yesterday:
+    if delta == 1:
         return "Yesterday"
-    return "Earlier"
+    if delta < 7:
+        return "This week"
+    if delta < 30:
+        return "This month"
+    if d.year == today.year:
+        return "Earlier this year"
+    return "Older"
 
 
 def _with_section_headers(rows: list[dict]) -> list[dict]:
-    """Insert a lightweight {"is_header": True, "label": ...} marker before
-    the first row of each date bucket. Rows already arrive newest-first
-    (see db.list_emails' ORDER BY date_ts DESC), so a single linear pass
-    is enough - no re-sorting.
-    """
+    """Insert a {"is_header": True, ...} marker before the first row of
+    each date bucket. Rows arrive newest-first (db.list_emails orders by
+    date_ts DESC), so one linear pass is enough - no re-sorting."""
     if not rows:
         return rows
     today = datetime.now().date()
-    yesterday = today - timedelta(days=1)
     out: list[dict] = []
     last_bucket: str | None = None
     for row in rows:
-        bucket = _date_bucket(row["date_ts"], today, yesterday)
+        bucket = _date_bucket(row["date_ts"], today)
         if bucket != last_bucket:
             out.append({"is_header": True, "label": bucket})
             last_bucket = bucket
@@ -92,14 +145,25 @@ class EmailListModel(QAbstractListModel):
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return None
+        row = self._rows[index.row()]
         if role == ROLE_MSG:
-            return self._rows[index.row()]
+            return row
+        if role == Qt.ItemDataRole.AccessibleTextRole:
+            if row.get("is_header"):
+                return row["label"]
+            state = "Unread" if not row["is_read"] else "Read"
+            return (
+                f"{state} message from "
+                f"{row['sender_name'] or row['sender_email']}, "
+                f"subject {row['subject'] or 'no subject'}, "
+                f"{format_full_time(row['date_ts'])}"
+            )
         return None
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:  # noqa: N802
         base = super().flags(index)
         if index.isValid() and self._rows[index.row()].get("is_header"):
-            return base & ~Qt.ItemFlag.ItemIsSelectable
+            return base & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled
         return base
 
     def set_rows(self, rows: list[dict]) -> None:
@@ -115,6 +179,10 @@ class EmailListModel(QAbstractListModel):
 
 
 class EmailRowDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.show_account = False
+
     def paint(self, painter: QPainter, option: QStyleOptionViewItem,
               index: QModelIndex) -> None:
         msg = index.data(ROLE_MSG)
@@ -129,151 +197,224 @@ class EmailRowDelegate(QStyledItemDelegate):
             self._paint_row(painter, option, msg)
         painter.restore()
 
+    # ------------------------------------------------------------ header
+
     def _paint_header(self, painter: QPainter, option: QStyleOptionViewItem,
                       label: str) -> None:
-        rect = option.rect.adjusted(t.SPACE_MD + 4, 0, -t.SPACE_MD, 0)
-        painter.setFont(t.make_font("section_label"))
+        rect = option.rect
+        font = t.make_font("overline")
+        metrics = QFontMetrics(font)
+        painter.setFont(font)
         painter.setPen(t.qcolor(t.TEXT_TERTIARY))
-        painter.drawText(
-            QRectF(rect), Qt.AlignmentFlag.AlignVCenter, label.upper()
+        text = label.upper()
+        text_width = metrics.horizontalAdvance(text)
+        x = rect.left() + _PAD_X + 2
+        baseline_rect = QRectF(x, rect.top(), text_width, rect.height())
+        painter.drawText(baseline_rect, Qt.AlignmentFlag.AlignVCenter, text)
+
+        # A hairline running from the label to the right edge ties the
+        # group together without drawing a full-width divider that would
+        # read as a table rule.
+        line_y = rect.center().y() + 1
+        painter.setPen(QPen(t.qcolor(t.BORDER_SUBTLE), 1))
+        painter.drawLine(
+            int(x + text_width + t.SPACE_MD), int(line_y),
+            int(rect.right() - _PAD_X), int(line_y),
         )
+
+    # --------------------------------------------------------------- row
 
     def _paint_row(self, painter: QPainter, option: QStyleOptionViewItem,
                    msg: dict) -> None:
-        rect = option.rect.adjusted(8, 3, -8, -3)
+        rect = option.rect.adjusted(4, 1, -4, -1)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        unread = not msg["is_read"]
+        lines = t.row_lines()
+
         if selected:
-            # A fill paired with a visible edge, not fill alone - the same
-            # pairing the nav pills and section cards use for "selected",
-            # so a glance at any part of the app reads it the same way.
-            painter.setPen(QPen(t.qcolor(t.ACCENT), 1))
-            painter.setBrush(t.qcolor(t.ACCENT_SOFT_BG))
-            painter.drawRoundedRect(
-                rect.adjusted(0, 0, -1, -1), t.RADIUS_MD, t.RADIUS_MD
-            )
-            # Left accent bar, the same "this one is active" cue the sidebar
-            # nav pills and tabs use - a filled tint alone reads as hover at
-            # a glance, the bar makes the selected row unambiguous.
-            bar_h = rect.height() * 0.55
-            bar = QRectF(
-                rect.left(), rect.top() + (rect.height() - bar_h) / 2, 3, bar_h,
-            )
             painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(t.qcolor(t.BG_SELECTED))
+            painter.drawRoundedRect(QRectF(rect), t.RADIUS_SM, t.RADIUS_SM)
+            bar_h = rect.height() * 0.62
             painter.setBrush(t.qcolor(t.ACCENT))
-            painter.drawRoundedRect(bar, 1.5, 1.5)
+            painter.drawRoundedRect(
+                QRectF(rect.left(), rect.top() + (rect.height() - bar_h) / 2, 3, bar_h),
+                1.5, 1.5,
+            )
         elif hovered:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(t.qcolor(t.BG_HOVER))
-            painter.drawRoundedRect(rect, t.RADIUS_MD, t.RADIUS_MD)
+            painter.drawRoundedRect(QRectF(rect), t.RADIUS_SM, t.RADIUS_SM)
 
-        unread = not msg["is_read"]
-        pad = 10
-        avatar_rect = QRectF(
-            rect.left() + pad, rect.top() + (rect.height() - _AVATAR_SIZE) / 2,
-            _AVATAR_SIZE, _AVATAR_SIZE,
-        )
-        sender_name = msg["sender_name"] or msg["sender_email"] or "(unknown)"
-        paint_avatar(painter, avatar_rect, msg["sender_email"] or sender_name,
-                    sender_name, msg["sender_email"])
-
-        text_left = avatar_rect.right() + 12
-        text_right = rect.right() - 10
-        text_width = max(10, text_right - text_left)
-
-        # -- top line: unread dot + sender name ... time
-        top_y = rect.top() + 9
-        name_font = t.make_font("sender" if unread else "sender_read")
-        painter.setFont(name_font)
-        fm = QFontMetrics(name_font)
-
-        time_text = format_time(msg["date_ts"])
-        time_font = t.make_font("timestamp")
-        time_width = QFontMetrics(time_font).horizontalAdvance(time_text)
-
-        dot_space = 0
+        # -- unread gutter (fixed width, so every row's avatar aligns)
+        gutter_x = rect.left() + _PAD_X - 2
         if unread:
-            dot_space = 10
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(t.qcolor(t.ACCENT))
+            painter.setBrush(t.qcolor(t.UNREAD))
             painter.drawEllipse(
-                QRectF(text_left, top_y + fm.ascent() / 2 - 3, 6, 6)
+                QRectF(
+                    gutter_x + (_GUTTER - _DOT) / 2,
+                    rect.center().y() - _DOT / 2 + 0.5,
+                    _DOT, _DOT,
+                )
             )
 
-        name_rect = QRectF(
-            text_left + dot_space, top_y, text_width - time_width - 10, fm.height()
+        # -- avatar
+        avatar_x = gutter_x + _GUTTER
+        avatar_rect = QRectF(
+            avatar_x, rect.top() + (rect.height() - _AVATAR) / 2, _AVATAR, _AVATAR
         )
-        painter.setPen(t.qcolor(t.TEXT_PRIMARY))
-        elided_name = fm.elidedText(sender_name, Qt.TextElideMode.ElideRight,
-                                    int(name_rect.width()))
-        painter.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter, elided_name)
+        sender_name = msg["sender_name"] or msg["sender_email"] or "(unknown)"
+        paint_avatar(
+            painter, avatar_rect, msg["sender_email"] or sender_name,
+            sender_name, msg["sender_email"], dimmed=not unread,
+        )
 
-        painter.setPen(t.qcolor(t.TEXT_TERTIARY))
-        painter.setFont(time_font)
+        text_left = avatar_rect.right() + t.SPACE_LG
+        text_right = rect.right() - _PAD_X
+        if text_right - text_left < 40:
+            return  # pane too narrow to render anything honestly
+
+        # -- line 1: sender, then timestamp hard-right
+        name_font = t.make_font("sender" if unread else "sender_read")
+        name_metrics = QFontMetrics(name_font)
+        time_font = t.make_font("timestamp")
+        time_metrics = QFontMetrics(time_font)
+        time_text = format_time(msg["date_ts"])
+        time_width = time_metrics.horizontalAdvance(time_text)
+
+        line_h = name_metrics.height()
+        block_h = line_h + (line_h - 2) + (line_h - 3 if lines >= 3 else 0)
+        top = rect.top() + (rect.height() - block_h) / 2
+
+        painter.setFont(name_font)
+        painter.setPen(t.qcolor(t.TEXT_PRIMARY if unread else t.TEXT_SECONDARY))
         painter.drawText(
-            QRectF(text_right - time_width, top_y, time_width, fm.height()),
+            QRectF(text_left, top, text_right - text_left - time_width - t.SPACE_MD,
+                   line_h),
+            Qt.AlignmentFlag.AlignVCenter,
+            name_metrics.elidedText(
+                sender_name, Qt.TextElideMode.ElideRight,
+                int(text_right - text_left - time_width - t.SPACE_MD),
+            ),
+        )
+        painter.setFont(time_font)
+        painter.setPen(t.qcolor(t.TEXT_TERTIARY))
+        painter.drawText(
+            QRectF(text_right - time_width, top, time_width, line_h),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, time_text,
         )
 
-        # -- bottom line: real star/attachment icons, then subject - snippet
-        bottom_y = top_y + fm.height() + 4
-        subject = msg["subject"] or "(no subject)"
+        # -- line 2: subject, with star/attachment pinned right
         subject_font = t.make_font("subject" if unread else "subject_read")
-        fm2 = QFontMetrics(subject_font)
-
-        icon_x = text_left
-        icon_y = bottom_y + (fm2.height() - t.ICON_SIZE_ROW) / 2
-        if msg["is_starred"]:
-            painter.drawPixmap(
-                int(icon_x), int(icon_y),
-                tinted_pixmap("star_filled", t.ICON_SIZE_ROW, t.STARRED),
-            )
-            icon_x += t.ICON_SIZE_ROW + 4
+        subject_metrics = QFontMetrics(subject_font)
+        subject_top = top + line_h
+        icons_width = 0.0
+        icon_x = text_right
         if msg["has_attachments"]:
+            icon_x -= _ICON
             painter.drawPixmap(
-                int(icon_x), int(icon_y),
-                tinted_pixmap("attachment", t.ICON_SIZE_ROW, t.TEXT_TERTIARY),
+                int(icon_x), int(subject_top + (subject_metrics.height() - _ICON) / 2),
+                tinted_pixmap("attachment", _ICON, t.TEXT_TERTIARY),
             )
-            icon_x += t.ICON_SIZE_ROW + 5
+            icons_width += _ICON + t.SPACE_XS
+            icon_x -= t.SPACE_XS
+        if msg["is_starred"]:
+            icon_x -= _ICON
+            painter.drawPixmap(
+                int(icon_x), int(subject_top + (subject_metrics.height() - _ICON) / 2),
+                tinted_pixmap("star_filled", _ICON, t.STARRED),
+            )
+            icons_width += _ICON + t.SPACE_XS
 
-        text_start = icon_x
-        combined = subject
-        if msg.get("snippet"):
-            combined += "  —  " + msg["snippet"]
-        painter.setPen(t.qcolor(t.TEXT_PRIMARY if unread else t.TEXT_SECONDARY))
+        subject_width = int(text_right - text_left - icons_width)
         painter.setFont(subject_font)
-        elided_subject = fm2.elidedText(
-            combined, Qt.TextElideMode.ElideRight, int(text_right - text_start)
-        )
+        painter.setPen(t.qcolor(t.TEXT_PRIMARY if unread else t.TEXT_SECONDARY))
         painter.drawText(
-            QRectF(text_start, bottom_y, text_right - text_start, fm2.height()),
-            Qt.AlignmentFlag.AlignVCenter, elided_subject,
+            QRectF(text_left, subject_top, subject_width, subject_metrics.height()),
+            Qt.AlignmentFlag.AlignVCenter,
+            subject_metrics.elidedText(
+                msg["subject"] or "(no subject)", Qt.TextElideMode.ElideRight,
+                max(20, subject_width),
+            ),
         )
+
+        if lines < 3:
+            return
+
+        # -- line 3: preview, with the receiving account when it matters
+        preview_font = t.make_font("preview")
+        preview_metrics = QFontMetrics(preview_font)
+        preview_top = subject_top + subject_metrics.height()
+        account_width = 0.0
+        if self.show_account and msg.get("account_email"):
+            account_text = msg["account_email"]
+            account_width = min(
+                preview_metrics.horizontalAdvance(account_text),
+                (text_right - text_left) * 0.38,
+            )
+            painter.setFont(preview_font)
+            painter.setPen(t.qcolor(t.TEXT_TERTIARY))
+            painter.drawText(
+                QRectF(text_right - account_width, preview_top, account_width,
+                       preview_metrics.height()),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                preview_metrics.elidedText(
+                    account_text, Qt.TextElideMode.ElideLeft, int(account_width)
+                ),
+            )
+            account_width += t.SPACE_LG
+
+        preview_width = int(text_right - text_left - account_width)
+        snippet = (msg.get("snippet") or "").replace("\n", " ").strip()
+        if snippet and preview_width > 20:
+            painter.setFont(preview_font)
+            painter.setPen(t.qcolor(t.TEXT_TERTIARY))
+            painter.drawText(
+                QRectF(text_left, preview_top, preview_width,
+                       preview_metrics.height()),
+                Qt.AlignmentFlag.AlignVCenter,
+                preview_metrics.elidedText(
+                    snippet, Qt.TextElideMode.ElideRight, preview_width
+                ),
+            )
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:  # noqa: N802
         msg = index.data(ROLE_MSG)
-        height = HEADER_HEIGHT if msg and msg.get("is_header") else ROW_HEIGHT
+        height = HEADER_HEIGHT if msg and msg.get("is_header") else t.row_height()
         return QSize(option.rect.width(), height)
 
 
 class EmailListView(QListView):
     email_selected = Signal(int)
+    email_activated = Signal(int)                # Enter / double-click
     context_menu_requested = Signal(int, object)  # email_id, global QPoint
+    reached_end = Signal()                        # scrolled to the bottom
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("emailList")
         self._model = EmailListModel(self)
         self.setModel(self._model)
-        self.setItemDelegate(EmailRowDelegate(self))
+        self._delegate = EmailRowDelegate(self)
+        self.setItemDelegate(self._delegate)
         self.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.setSelectionMode(QListView.SelectionMode.SingleSelection)
-        self.setMouseTracking(True)  # enables hover state in the delegate
+        self.setMouseTracking(True)  # enables the delegate's hover state
         self.setSpacing(0)
+        self.setUniformItemSizes(False)
         self.setFrameShape(QListView.Shape.NoFrame)
+        # Rows elide their own text to the viewport width, so a horizontal
+        # scrollbar can only ever be a layout bug made visible.
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.setAccessibleName("Message list")
         self.customContextMenuRequested.connect(self._on_context_menu)
         self.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        self.doubleClicked.connect(self._on_double_clicked)
+        self.verticalScrollBar().valueChanged.connect(self._on_scrolled)
+        t.theme_manager.density_changed.connect(self._on_density_changed)
 
     # ------------------------------------------------------------------ data
 
@@ -282,8 +423,15 @@ class EmailListView(QListView):
         if keep_selected_id is not None:
             self._select_silently(keep_selected_id)
 
+    def set_show_account(self, show: bool) -> None:
+        """Show each row's receiving account - on in a unified view,
+        off when the list is already scoped to one account."""
+        if self._delegate.show_account != show:
+            self._delegate.show_account = show
+            self.viewport().update()
+
     def row_count(self) -> int:
-        """Real message rows only - excludes synthetic date-section headers."""
+        """Real message rows only - excludes synthetic date headers."""
         return sum(1 for r in self._model._rows if not r.get("is_header"))
 
     def selected_email_id(self) -> int | None:
@@ -298,6 +446,7 @@ class EmailListView(QListView):
         index = self._model.index_of(email_id)
         if index.isValid():
             self.setCurrentIndex(index)
+            self.scrollTo(index, QListView.ScrollHint.EnsureVisible)
 
     def _select_silently(self, email_id: int) -> None:
         index = self._model.index_of(email_id)
@@ -307,12 +456,45 @@ class EmailListView(QListView):
         self.setCurrentIndex(index)
         self.selectionModel().blockSignals(False)
 
+    def move_selection(self, delta: int) -> None:
+        """Keyboard j/k and arrow navigation, skipping date headers."""
+        rows = self._model._rows
+        if not rows:
+            return
+        current = self.currentIndex().row()
+        step = 1 if delta > 0 else -1
+        position = current if current >= 0 else (-1 if step > 0 else len(rows))
+        for _ in range(abs(delta) or 1):
+            position += step
+            while 0 <= position < len(rows) and rows[position].get("is_header"):
+                position += step
+        if 0 <= position < len(rows):
+            index = self._model.index(position, 0)
+            self.setCurrentIndex(index)
+            self.scrollTo(index, QListView.ScrollHint.EnsureVisible)
+
     # --------------------------------------------------------------- signals
+
+    def _on_density_changed(self) -> None:
+        # Row geometry comes from the delegate's sizeHint, so Qt has to be
+        # told the hints are stale; a plain repaint would keep old heights.
+        self._delegate.sizeHintChanged.emit(QModelIndex())
+        self.scheduleDelayedItemsLayout()
 
     def _on_selection_changed(self, *_args) -> None:
         email_id = self.selected_email_id()
         if email_id is not None:
             self.email_selected.emit(email_id)
+
+    def _on_double_clicked(self, index) -> None:
+        msg = index.data(ROLE_MSG)
+        if msg and not msg.get("is_header"):
+            self.email_activated.emit(msg["id"])
+
+    def _on_scrolled(self, value: int) -> None:
+        bar = self.verticalScrollBar()
+        if bar.maximum() and value >= bar.maximum() - 8:
+            self.reached_end.emit()
 
     def _on_context_menu(self, pos) -> None:
         index = self.indexAt(pos)
@@ -320,4 +502,26 @@ class EmailListView(QListView):
             return
         msg = index.data(ROLE_MSG)
         if msg and not msg.get("is_header"):
-            self.context_menu_requested.emit(msg["id"], self.viewport().mapToGlobal(pos))
+            self.context_menu_requested.emit(
+                msg["id"], self.viewport().mapToGlobal(pos)
+            )
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        key = event.key()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            email_id = self.selected_email_id()
+            if email_id is not None:
+                self.email_activated.emit(email_id)
+                event.accept()
+                return
+        if key in (Qt.Key.Key_J, Qt.Key.Key_K) and not event.modifiers():
+            self.move_selection(1 if key == Qt.Key.Key_J else -1)
+            event.accept()
+            return
+        if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+            # Qt's own arrow handling would land on a date header, which
+            # is not selectable, and stall there.
+            self.move_selection(1 if key == Qt.Key.Key_Down else -1)
+            event.accept()
+            return
+        super().keyPressEvent(event)

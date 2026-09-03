@@ -64,6 +64,10 @@ DEFAULTS = {
     # small by default so the first paint of a large mailbox stays fast:
     # 100, then "Load more" -> 200, then 300, and so on.
     "messages_shown": 100,
+    # Appearance. "system" follows the Windows light/dark setting; the
+    # density controls how many lines each message row shows.
+    "theme_mode": "system",
+    "list_density": "cozy",
 }
 
 

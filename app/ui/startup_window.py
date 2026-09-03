@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 
 from app import APP_NAME
 from app.ui import theme as t
-from app.ui.icons import make_app_icon
+from app.ui.icons import make_app_icon, make_mark
 from app.ui.native_theme import apply_dark_titlebar
 
 
@@ -40,7 +40,7 @@ class StartupWindow(QWidget):
         col.addStretch(1)
 
         icon_label = QLabel()
-        icon_label.setPixmap(make_app_icon().pixmap(48, 48))
+        icon_label.setPixmap(make_mark(44, t.TEXT_PRIMARY))
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(icon_label)
         col.addSpacing(t.SPACE_MD)

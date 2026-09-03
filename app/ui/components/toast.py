@@ -250,14 +250,27 @@ class ToastHost(QObject):
             self._toasts.remove(card)
         self._relayout(animate=True)
 
+    def _stack_top(self) -> int:
+        """Where the stack begins so that the newest card sits one margin
+        above the bottom edge. Anchoring to the bottom keeps toasts clear
+        of the command bar and the reading pane's action row, which live
+        along the top edge - a top-right toast lands directly on top of
+        Reply/Delete."""
+        total = sum(card.height() for card in self._toasts)
+        total += t.TOAST_SPACING * max(0, len(self._toasts) - 1)
+        return max(t.TOAST_MARGIN, self._window.height() - t.TOAST_MARGIN - total)
+
     def _next_y(self) -> int:
-        y = t.TOAST_MARGIN
+        y = self._stack_top()
         for card in self._toasts:
             y += card.height() + t.TOAST_SPACING
         return y
 
     def _relayout(self, *, animate: bool) -> None:
-        y = t.TOAST_MARGIN
+        # Oldest at the top of the stack, newest along the bottom, so a
+        # new toast never shoves the one being read out from under the
+        # pointer.
+        y = self._stack_top()
         x = self._window.width() - t.TOAST_WIDTH - t.TOAST_MARGIN
         for card in self._toasts:
             card.slide_to(QPoint(x, y), animate=animate)

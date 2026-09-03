@@ -25,9 +25,10 @@ from app import APP_NAME, __version__, config, logging_setup
 from app.database import Database
 from app.migration import migrate_legacy_install
 from app.security import crypto_store
+from app.ui.components import focus as focus_ring
+from app.ui.design.theme import theme_manager
 from app.ui.main_window import MainWindow
 from app.ui.startup_window import StartupWindow
-from app.ui.style import get_stylesheet
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +69,14 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
     app.setStyle("Fusion")  # consistent base look across Windows versions
-    app.setStyleSheet(get_stylesheet())
+    # The theme manager owns the palette and the stylesheet together, so
+    # native-drawn parts of Qt and the QSS-drawn parts can never disagree.
+    theme_manager.apply(app)
+    # Keyboard focus rings, shown for Tab/shortcut focus and not for a
+    # plain mouse click (see components/focus.py).
+    focus_ring.install(app)
     app.setQuitOnLastWindowClosed(True)
 
     # Visible immediately - nothing above this line touches the database,

@@ -18,7 +18,7 @@ into a solid blob instead of reading as a U.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
 # Sizes Windows actually requests for a window/taskbar/tray icon.
 ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
@@ -90,6 +90,51 @@ def _draw_icon(size: int) -> QPixmap:
     painter.setBrush(Qt.GlobalColor.white)
     painter.drawRoundedRect(QRectF(body_x, body_y, body_w, body_h), body_radius, body_radius)
 
+    painter.end()
+    return pixmap
+
+
+def make_mark(size: int, color: str) -> QPixmap:
+    """The same padlock-U silhouette in a single color, for use *inside*
+    the app (the command bar lockup, the startup window).
+
+    The two-tone window/taskbar icon is built to survive any wallpaper, so
+    it carries a white lock body - which at 20px on a dark command bar
+    reads as a small white block rather than as a mark. A monochrome
+    version tinted from the palette is the right thing on a surface whose
+    color the app already controls.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    ink = QColor(color)
+
+    margin = max(1.0, size * 0.06)
+    content = size - 2 * margin
+    body_stroke = max(1.0, size * 0.09)
+    body_w = content * 0.82
+    body_h = content * 0.54
+    body_x = (size - body_w) / 2
+    body_y = size - margin - body_stroke / 2 - body_h
+    body_radius = body_w * 0.16
+
+    stroke = max(1.5, size * 0.115)
+    min_gap = max(1.5, size * 0.10)
+    u_width = max(body_w * 0.52, 2 * stroke + min_gap)
+    u_x = (size - u_width) / 2
+    u_height = body_y - margin + stroke * 0.5
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(ink)
+    painter.drawPath(_u_shape(u_x, margin, u_width, u_height, stroke))
+
+    painter.setPen(QPen(ink, body_stroke))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(
+        QRectF(body_x, body_y, body_w, body_h), body_radius, body_radius
+    )
     painter.end()
     return pixmap
 

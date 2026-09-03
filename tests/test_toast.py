@@ -60,8 +60,15 @@ def window(qapp):
 
 
 def _is_backdrop(color: QColor) -> bool:
-    """Magenta-ish => the backdrop is showing through."""
-    return color.red() > 40 and color.blue() > 40 and color.green() < 60
+    """Magenta-ish => the backdrop is showing through.
+
+    The thresholds have to be tight enough to mean *magenta* and not
+    merely "some red and blue": a dark neutral like the surface border
+    (#2a2d35) has red and blue above 40 with green below 60 and would
+    otherwise be reported as bleed-through, which is how this check
+    fails on an opaque toast that is working perfectly.
+    """
+    return color.red() > 150 and color.blue() > 150 and color.green() < 100
 
 
 def test_toast_surface_is_fully_opaque(qapp, window):

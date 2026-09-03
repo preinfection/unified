@@ -74,3 +74,8 @@ desktop.ini
 *_backup*
 temp/
 tmp/
+
+# Design-reference clones and throwaway render scripts used during the
+# redesign - research material, never part of the shipped app.
+.design-research/
+shots/

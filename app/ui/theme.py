@@ -1,217 +1,278 @@
-"""Design system: every color, spacing, radius, typography, icon-size,
-control-height, and animation-duration value the UI uses, in one place.
+"""The design system's front door.
 
-Single source of truth: style.py builds the QSS from these constants, and
-the custom-painted widgets (email row delegate, account items) import the
-same values directly - so a delegate's hand-painted hover state can never
-drift out of sync with what the stylesheet says "hover" means everywhere
-else, and no widget invents its own one-off pixel value.
+Everything in the app imports this module as `t` and reads tokens off it.
+It is deliberately thin: the scales live in `app.ui.design.tokens`, the
+color roles in `app.ui.design.palette`, and the active theme in
+`app.ui.design.theme`. What this file adds is that *color* lookups resolve
+against the palette that is active right now, through a module-level
+`__getattr__`.
 
-Palette and scale rebuilt against the OvertimeUI visual reference: darker,
-more saturated elevation ramp (closer to the reference's near-black
-bg/bgAlt/surface/surfaceHi steps than the previous charcoal-gray version),
-a brighter, glow-capable accent, and a bumped-up radius/control-size scale
-- the reference reads as a rounder, more confident, more deliberately
-layered UI than a flat "dark mode" palette, and this is the translation of
-that into a professional desktop app rather than a copy of its exact look.
+That matters for one specific reason: the app can switch between light and
+dark while it is running. If `t.TEXT_PRIMARY` were an ordinary module
+constant it would be frozen at import time, and every hand-painted surface
+(the message-row delegate, the avatar, the navigation indicator) would go
+on painting yesterday's theme until the process restarted. Because the
+lookup is a function call, a delegate that reads `t.TEXT_PRIMARY` inside
+`paint()` is simply correct on its next repaint, with no invalidation
+protocol and nothing to remember to wire up.
+
+Naming: the UPPER_CASE names below are the semantic roles spelled the way
+Python constants are spelled. `BG_APP` is the message-list floor,
+`BG_SIDEBAR` the navigation column, `BG_PANEL` the raised reading
+surface - the same three-step elevation the palette defines, under the
+names the codebase already uses for them.
 """
 
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont  # noqa: F401  (QFont re-exported)
 
-# ---------------------------------------------------------------- backgrounds
-# Five elevation steps, each one step lighter than the last - the app never
-# needs a widget to guess how "raised" it should look; it picks the surface
-# that matches its place in this stack. Pulled noticeably darker/cooler than
-# the previous palette, matching the reference's near-black bg/bgAlt/surface
-# ramp rather than a mid-gray "charcoal" dark theme.
-# Values below are the reference's elevation ramp translated 1:1 from its
-# defaultTheme(): bg(11,12,17) bgAlt(16,18,25) surface(26,29,40)
-# surfaceHi(38,43,58). Unified needs one extra step the reference doesn't
-# (a distinct selected-row tint), which sits between surface and surfaceHi
-# with an accent bias.
-BG_APP = "#0b0c11"        # reference `bg`      - window floor / email list
-BG_SIDEBAR = "#101219"    # reference `bgAlt`   - sidebar, panel bodies
-BG_PANEL = "#1a1d28"      # reference `surface` - cards, inputs, controls at rest
-BG_HOVER = "#262b3a"      # reference `surfaceHi` - hover / active
-BG_SELECTED = "#1f2a44"   # accent-biased selection tint (Unified-specific)
-BG_OVERLAY = "#151822"    # popups/menus/tooltips - just above bgAlt
+from app.ui.design import palette as _palette_mod
+from app.ui.design import tokens as _tokens
+from app.ui.design.palette import Palette, contrast_ratio, mix, relative_luminance
+from app.ui.design.theme import (
+    MODE_DARK,
+    MODE_LIGHT,
+    MODE_SYSTEM,
+    MODES,
+    repolish,
+    set_variant,
+    theme_manager,
+)
+from app.ui.design.tokens import (  # noqa: F401  (re-exported scale tokens)
+    AVATAR_LG,
+    AVATAR_MD,
+    AVATAR_SM,
+    BODY_PADDING,
+    BREAKPOINT_COLLAPSE_SIDEBAR,
+    BREAKPOINT_STACK_READER,
+    COMMAND_BAR_HEIGHT,
+    CONTROL_LG,
+    CONTROL_MD,
+    CONTROL_SM,
+    CONTROL_XS,
+    DENSITY_COMPACT,
+    DENSITY_COZY,
+    DENSITY_DEFAULT,
+    DENSITY_METRICS,
+    DENSITY_ORDER,
+    DENSITY_RELAXED,
+    DURATION_BASE,
+    DURATION_FAST,
+    DURATION_INSTANT,
+    DURATION_SLOW,
+    FONT_FAMILIES,
+    FONT_FAMILIES_CSS,
+    FONT_FAMILIES_MONO,
+    FONT_FAMILIES_MONO_CSS,
+    GROUP_HEADER_HEIGHT,
+    ICON_LG,
+    ICON_MD,
+    ICON_SM,
+    ICON_XL,
+    ICON_XS,
+    LIST_HEADER_HEIGHT,
+    LIST_WIDTH_DEFAULT,
+    LIST_WIDTH_MIN,
+    RADIUS_LG,
+    RADIUS_MD,
+    RADIUS_NONE,
+    RADIUS_PILL,
+    RADIUS_SCALE,
+    RADIUS_SM,
+    RADIUS_XL,
+    RADIUS_XS,
+    READER_HEADER_HEIGHT,
+    READER_MAX_TEXT_WIDTH,
+    READER_WIDTH_MIN,
+    ROW_SPACING,
+    SHADOW_PRESETS,
+    SIDEBAR_RAIL_WIDTH,
+    SIDEBAR_WIDTH,
+    SIDEBAR_WIDTH_MIN,
+    SIZE_2XL,
+    SIZE_2XS,
+    SIZE_3XL,
+    SIZE_LG,
+    SIZE_MD,
+    SIZE_SM,
+    SIZE_XL,
+    SIZE_XS,
+    SPACE_0,
+    SPACE_2XL,
+    SPACE_2XS,
+    SPACE_3XL,
+    SPACE_4XL,
+    SPACE_5XL,
+    SPACE_6XL,
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XL,
+    SPACE_XS,
+    SPACING_SCALE,
+    STATUS_BAR_HEIGHT,
+    STROKE_FOCUS,
+    STROKE_THICK,
+    STROKE_THIN,
+    TAB_HEIGHT,
+    TITLE_HEIGHT,
+    TYPOGRAPHY,
+    WEIGHT_BOLD,
+    WEIGHT_MEDIUM,
+    WEIGHT_REGULAR,
+    WEIGHT_SEMIBOLD,
+    make_font,
+)
 
-# ------------------------------------------------------------------- borders
-BORDER = "#2a2f3e"        # reference `border`   - low-contrast hairlines
-BORDER_LIGHT = "#40485c"  # reference `borderHi` - focused / hovered edges
+__all__ = ["make_font", "qcolor", "theme_manager", "Palette"]
 
-# --------------------------------------------------------------------- text
-TEXT_PRIMARY = "#eceef6"    # reference `text`
-TEXT_SECONDARY = "#8a91a2"  # reference `textDim`
-TEXT_TERTIARY = "#646b7d"   # one step below textDim for tertiary metadata
-TEXT_ON_ACCENT = "#ffffff"
+# --------------------------------------------------- legacy spacing names
+# The pre-redesign scale used XXS/XXL/XXXL; the token module standardised
+# on 2XS/2XL/etc. Both names point at the same numbers so no call site had
+# to be touched purely for a rename.
+SPACE_XXS = SPACE_2XS
+SPACE_XXL = SPACE_4XL
+SPACE_XXXL = SPACE_6XL
+SIZE_TITLE = SIZE_2XL
+SIZE_XXL = SIZE_2XL
+ICON_SIZE_ROW = _tokens.ICON_XS + 1   # inline row glyph (star / attachment)
+ICON_SIZE_ACTION = _tokens.ICON_MD    # reading-pane and compose actions
+ICON_SIZE_TOOLBAR = _tokens.ICON_MD
+ICON_SIZE_NAV = _tokens.ICON_MD
 
-# ------------------------------------------------------------------- accents
-# Exactly the reference's accent / accentDim / accentGlow.
-ACCENT = "#60a5ff"
-ACCENT_HOVER = "#8cbcff"
-ACCENT_PRESSED = "#365c96"   # reference `accentDim`
-ACCENT_GLOW = "#78b4ff"      # reference `accentGlow`
-ACCENT_SOFT_BG = "#1a2740"   # tinted background behind a selected pill/row
+HEIGHT_SM = CONTROL_SM
+HEIGHT_MD = CONTROL_MD
+HEIGHT_LG = CONTROL_LG
 
-SUCCESS = "#34c77b"
-WARNING = "#e8a53d"
-ERROR = "#eb5c60"   # reference `danger`
-STARRED = "#f0b429"
-SECURE = SUCCESS   # encryption/local-storage affordances read as "good"
-
-# Per-status colors used by both the sidebar status dot and the row delegate.
-STATUS_COLORS = {
-    "syncing": ACCENT,
-    "waiting": TEXT_TERTIARY,
-    "done": SUCCESS,
-    "partial": WARNING,
-    "error": ERROR,
-    "idle": TEXT_TERTIARY,
+# ------------------------------------------------------ live color roles
+# name used in code -> palette role. Resolved on every attribute access
+# (see __getattr__) so a running app can change theme.
+_COLOR_ALIASES = {
+    # Surfaces
+    "BG_APP": "canvas",
+    "BG_CANVAS": "canvas",
+    "BG_SIDEBAR": "sidebar",
+    "BG_PANEL": "surface",
+    "BG_SURFACE": "surface",
+    "BG_HOVER": "surface_hover",
+    "BG_ACTIVE": "surface_active",
+    "BG_SELECTED": "selected",
+    "BG_SELECTED_INACTIVE": "selected_inactive",
+    "BG_OVERLAY": "overlay",
+    "SCRIM": "scrim",
+    # Strokes
+    "BORDER_SUBTLE": "border_subtle",
+    "BORDER": "border",
+    "BORDER_LIGHT": "border_strong",
+    "BORDER_STRONG": "border_strong",
+    "FOCUS_RING": "focus_ring",
+    # Text
+    "TEXT_PRIMARY": "text_primary",
+    "TEXT_SECONDARY": "text_secondary",
+    "TEXT_TERTIARY": "text_tertiary",
+    "TEXT_DISABLED": "text_disabled",
+    "TEXT_ON_ACCENT": "text_on_accent",
+    "TEXT_LINK": "text_link",
+    # Accent
+    "ACCENT": "accent",
+    "ACCENT_HOVER": "accent_hover",
+    "ACCENT_PRESSED": "accent_pressed",
+    "ACCENT_GLOW": "accent_hover",
+    "ACCENT_SOFT_BG": "accent_subtle",
+    "ACCENT_SUBTLE": "accent_subtle",
+    "ACCENT_FG": "accent_fg",
+    "ACCENT_SOLID": "accent_solid",
+    "ACCENT_SOLID_HOVER": "accent_solid_hover",
+    "ACCENT_SOLID_PRESSED": "accent_solid_pressed",
+    # Status
+    "INFO": "info_fg",
+    "INFO_BG": "info_bg",
+    "SUCCESS": "success_fg",
+    "SUCCESS_BG": "success_bg",
+    "WARNING": "warning_fg",
+    "WARNING_BG": "warning_bg",
+    "ERROR": "danger_fg",
+    "ERROR_BG": "danger_bg",
+    "DANGER_STRONG": "danger_strong",
+    "SECURE": "success_fg",
+    "STARRED": "star",
+    "UNREAD": "unread",
+    # Icon defaults
+    "ICON_SECONDARY": "text_secondary",
+    "ICON_ACTIVE": "text_primary",
+    "ICON_SELECTED": "accent",
+    "ICON_DISABLED": "text_disabled",
 }
 
-# ------------------------------------------------------------------ spacing
-# A single 4px-based scale, used consistently instead of ad-hoc pixel
-# values scattered through each widget's layout code.
-SPACE_XXS = 2
-SPACE_XS = 4
-SPACE_SM = 8
-SPACE_MD = 12
-SPACE_LG = 16
-SPACE_XL = 24
-SPACE_XXL = 32
-SPACE_XXXL = 48
-
-# -------------------------------------------------------------------- radii
-# Matched to the reference's actual corner() calls: 4 on small indicators,
-# 6 on controls/options, 8 on panel bodies and tab strips, 10 on the
-# window panel itself. The previous scale had drifted noticeably rounder
-# than the reference, which read as a softer, less precise product.
-RADIUS_XS = 4     # checkboxes, tiny chips, menu items
-RADIUS_SM = 6     # inputs, buttons, list rows, dropdown options
-RADIUS_MD = 8     # nav pills, menus, panel bodies, toasts
-RADIUS_LG = 10    # cards, the main window panel
-RADIUS_XL = 12    # dialogs, large panels
-RADIUS_PILL = 999  # search field, badges, fully-rounded controls
-
-# ------------------------------------------------------------- control sizes
-# The reference runs denser than Unified had drifted to: 26px control
-# rows, 30px tab buttons, 36px title bar. These keep desktop-comfortable
-# hit targets while pulling back toward that density.
-HEIGHT_SM = 26     # compact controls (chips, inline actions) - reference row
-HEIGHT_MD = 32     # standard buttons/inputs
-HEIGHT_LG = 38     # primary actions (Send, Compose)
-
-# Structural tokens lifted from the reference's defaultStyle().
-TAB_HEIGHT = 30        # per-nav-item height
-BODY_PADDING = 12      # inner padding of a content page
-ROW_SPACING = 2        # vertical gap between stacked control rows
-TITLE_HEIGHT = 36      # dialog/window header band
-SIDEBAR_WIDTH = 232    # reference tabWidth=120 scaled for real email addresses
-
-ICON_SIZE_ROW = 13    # inline row glyphs (star/attachment in the list)
-ICON_SIZE_ACTION = 16  # reading-pane/compose action buttons
-ICON_SIZE_TOOLBAR = 18
-ICON_SIZE_NAV = 17
-
-# --------------------------------------------------------------- animation
-# The reference's shared tween triple (T_FAST/T_NORMAL/T_SLOW), in ms.
-# Its easing is Quint/Out throughout; QEasingCurve.OutQuint is the direct
-# equivalent and is what the animated components here use.
-DURATION_FAST = 120   # hover/press feedback
-DURATION_BASE = 180   # selection changes, panel content swaps
-DURATION_SLOW = 280   # panel open/close, dialogs
-
-# --------------------------------------------------------------- typography
-# A native Windows 11 font stack: Segoe UI Variable is the modern system
-# font (sharper, better spacing than classic Segoe UI); QFont.setFamilies
-# falls back through the list automatically on Windows 10 or if the
-# variable font isn't installed, so this never needs a runtime OS check.
-FONT_FAMILIES = ["Segoe UI Variable Text", "Segoe UI", "Arial", "sans-serif"]
-FONT_FAMILIES_CSS = ", ".join(f'"{f}"' for f in FONT_FAMILIES[:-1]) + ", sans-serif"
-
-WEIGHT_REGULAR = 400
-WEIGHT_MEDIUM = 500
-WEIGHT_SEMIBOLD = 600
-WEIGHT_BOLD = 700
-
-SIZE_XS = 11
-SIZE_SM = 12
-SIZE_MD = 13
-SIZE_LG = 14
-SIZE_XL = 16
-SIZE_XXL = 20
-SIZE_TITLE = 22
-
-# name -> (pixel size, weight, letter-spacing in px or None)
-# Every context that renders text - list rows, dialogs, compose, settings -
-# reads its font from here, so "what should a subject line look like"
-# has exactly one answer across the whole app.
-TYPOGRAPHY: dict[str, tuple[int, int, float | None]] = {
-    "app_title": (SIZE_TITLE, WEIGHT_BOLD, None),
-    "dialog_heading": (SIZE_XL, WEIGHT_BOLD, None),
-    "nav_label": (SIZE_MD, WEIGHT_MEDIUM, None),
-    "section_label": (SIZE_XS, WEIGHT_BOLD, 0.8),
-    "account_label": (SIZE_MD, WEIGHT_MEDIUM, None),
-    "sender": (SIZE_MD, WEIGHT_SEMIBOLD, None),
-    "sender_read": (SIZE_MD, WEIGHT_REGULAR, None),
-    "subject": (SIZE_SM, WEIGHT_MEDIUM, None),
-    "subject_read": (SIZE_SM, WEIGHT_REGULAR, None),
-    "preview": (SIZE_SM, WEIGHT_REGULAR, None),
-    "timestamp": (SIZE_XS, WEIGHT_REGULAR, None),
-    "button": (SIZE_MD, WEIGHT_SEMIBOLD, None),
-    "menu_item": (SIZE_MD, WEIGHT_REGULAR, None),
-    "field_label": (SIZE_SM, WEIGHT_MEDIUM, None),
-    "field_value": (SIZE_MD, WEIGHT_REGULAR, None),
-    "body": (SIZE_MD, WEIGHT_REGULAR, None),
-    "status": (SIZE_SM, WEIGHT_MEDIUM, None),
-    "caption": (SIZE_XS, WEIGHT_REGULAR, None),
+# Sync status -> the palette role its dot is painted with.
+_STATUS_ROLES = {
+    "syncing": "accent",
+    "waiting": "text_tertiary",
+    "done": "success_fg",
+    "partial": "warning_fg",
+    "error": "danger_fg",
+    "idle": "text_tertiary",
 }
 
 
-def make_font(preset: str, *, italic: bool = False) -> QFont:
-    """Build a QFont from a named TYPOGRAPHY entry."""
-    size, weight, spacing = TYPOGRAPHY[preset]
-    font = QFont()
-    font.setFamilies(FONT_FAMILIES)
-    font.setPixelSize(size)
-    font.setWeight(QFont.Weight(weight))
-    if spacing is not None:
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
-    font.setItalic(italic)
-    return font
+def __getattr__(name: str) -> object:
+    """Resolve color names against the palette that is active right now."""
+    role = _COLOR_ALIASES.get(name)
+    if role is not None:
+        return theme_manager.palette.color(role)
+    if name == "STATUS_COLORS":
+        p = theme_manager.palette
+        return {key: p.color(role) for key, role in _STATUS_ROLES.items()}
+    if name == "AVATAR_HUES":
+        return theme_manager.palette.avatar_hues
+    if name == "PALETTE":
+        return theme_manager.palette
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# --------------------------------------------------------------------- icons
-ICON_SECONDARY = TEXT_SECONDARY   # default icon color (inactive)
-ICON_ACTIVE = TEXT_PRIMARY        # hovered
-ICON_SELECTED = ACCENT            # checked/pressed
-ICON_DISABLED = TEXT_TERTIARY
+def __dir__() -> list[str]:
+    return sorted(
+        list(globals()) + list(_COLOR_ALIASES) + ["STATUS_COLORS", "AVATAR_HUES", "PALETTE"]
+    )
 
 
 def qcolor(hex_value: str) -> QColor:
     return QColor(hex_value)
 
 
-# --------------------------------------------------------------- elevation
-# Qt Style Sheets have no box-shadow property, so real elevation is done
-# with QGraphicsDropShadowEffect. Three presets cover everything the app
-# needs: a resting card, a hovering/dragging state, and a modal-level
-# surface - rather than each call site inventing its own blur/offset.
-SHADOW_PRESETS = {
-    "sm": dict(blur=12, y_offset=3, alpha=70),
-    "md": dict(blur=24, y_offset=6, alpha=110),
-    "lg": dict(blur=40, y_offset=12, alpha=150),
-}
+def status_color(status_key: str) -> str:
+    return theme_manager.palette.color(_STATUS_ROLES.get(status_key, "text_tertiary"))
 
 
-def apply_soft_shadow(widget, blur: int = 24, y_offset: int = 6,
-                      alpha: int = 110) -> None:
-    """Attach a real, soft drop shadow to an elevated surface (cards,
-    dialogs). Qt Style Sheets have no box-shadow property, so this is done
-    with QGraphicsDropShadowEffect instead of faking depth with borders.
+def is_dark() -> bool:
+    return theme_manager.is_dark
+
+
+def duration(base_ms: int) -> int:
+    """Animation duration, honouring the OS reduced-motion preference."""
+    return theme_manager.duration(base_ms)
+
+
+def row_height() -> int:
+    return theme_manager.row_height
+
+
+def row_lines() -> int:
+    return theme_manager.row_lines
+
+
+# ------------------------------------------------------------- elevation
+
+
+def apply_soft_shadow(widget, blur: int = 22, y_offset: int = 6,
+                      alpha: int = 100) -> None:
+    """Attach a real drop shadow to a surface that genuinely floats.
+
+    Qt Style Sheets have no box-shadow, so this is the only way to express
+    elevation beyond surface contrast. Used sparingly and never on a
+    scrolling view: QGraphicsDropShadowEffect forces the whole subtree
+    through a software raster path on every repaint.
     """
     from PySide6.QtWidgets import QGraphicsDropShadowEffect
 
@@ -227,55 +288,37 @@ def apply_elevation(widget, level: str = "md") -> None:
     apply_soft_shadow(widget, **SHADOW_PRESETS[level])
 
 
-def apply_glow(widget, color: str = ACCENT, blur: int = 28, alpha: int = 130) -> None:
-    """A soft colored halo instead of a neutral black drop shadow - the
-    reference's "ambient light behind the panel" technique, used sparingly
-    on the app's one or two most important surfaces (the primary compose
-    action, the active sidebar item) rather than everywhere, so it reads
-    as emphasis and not visual noise.
-    """
-    from PySide6.QtWidgets import QGraphicsDropShadowEffect
-
-    c = QColor(color)
-    c.setAlpha(alpha)
-    effect = QGraphicsDropShadowEffect(widget)
-    effect.setBlurRadius(blur)
-    effect.setOffset(0, 0)
-    effect.setColor(c)
-    widget.setGraphicsEffect(effect)
-
-
-def vgradient(top: str, bottom: str) -> str:
-    """A top-to-bottom QSS gradient stop pair - Qt Style Sheets support
-    qlineargradient() directly, unlike box-shadow; used for the toolbar
-    and sidebar masthead so they read as lit surfaces instead of flat
-    fills, translating the reference's sheen/gradient-stripe technique
-    into what QSS can actually express.
-    """
-    return f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {top}, stop:1 {bottom})"
-
-
 # ------------------------------------------------------------------ toasts
-# In-app toast notifications, stacked bottom-right over the main window.
-# Sizing/timing modeled on a common toast pattern (accent-stripe card with a
-# shrinking countdown bar); colors reuse the existing status palette above so
-# a toast never introduces a color the rest of the app doesn't already use.
+# Toasts are the one deliberately inverted surface in the product: a black
+# card in both themes, so a transient system message never reads as part
+# of the mailbox behind it. Painted directly in _ToastCard.paintEvent
+# (not via QSS) because a QWidget *subclass* does not paint a stylesheet
+# background at all unless WA_StyledBackground is set.
 TOAST_WIDTH = 320
-TOAST_MARGIN = 16      # gap from the window edge
-TOAST_SPACING = 8      # gap between stacked toasts
-# Toasts float over arbitrary app content, so their surface is a true
-# opaque black rather than one of the translucent-looking elevation
-# steps - a toast must never let whatever is behind it show through.
-# Painted directly in _ToastCard.paintEvent (not via QSS): a QWidget
-# *subclass* does not paint a stylesheet background at all unless
-# WA_StyledBackground is set, which is what made these look transparent.
+TOAST_MARGIN = 16
+TOAST_SPACING = 8
 TOAST_BG = "#000000"
 TOAST_STRIPE_WIDTH = 3
 TOAST_DEFAULT_DURATION_MS = 4500
 TOAST_SLIDE_MS = DURATION_SLOW
+
+
+def toast_kind_colors() -> dict[str, str]:
+    p = theme_manager.palette
+    return {
+        "info": p.accent,
+        "success": p.success_fg,
+        "warning": p.warning_fg,
+        "error": p.danger_fg,
+    }
+
+
+# Kept as a module attribute for call sites that index it directly. The
+# values are the *dark* palette's status hues, which is correct in both
+# themes because the toast surface is black in both.
 TOAST_KIND_COLORS = {
-    "info": ACCENT,
-    "success": SUCCESS,
-    "warning": WARNING,
-    "error": ERROR,
+    "info": _palette_mod.DARK.accent,
+    "success": _palette_mod.DARK.success_fg,
+    "warning": _palette_mod.DARK.warning_fg,
+    "error": _palette_mod.DARK.danger_fg,
 }

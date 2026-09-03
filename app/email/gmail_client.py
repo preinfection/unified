@@ -389,10 +389,19 @@ class GmailClient:
 
     # ------------------------------------------------------------------- sending
 
-    def send(self, to: str, subject: str, body: str) -> None:
+    def send(self, to: str, subject: str, body: str,
+             cc: str = "", bcc: str = "") -> None:
         mime = MIMEText(body, "plain", "utf-8")
         mime["To"] = to
         mime["From"] = self.email
+        if cc:
+            mime["Cc"] = cc
+        if bcc:
+            # Gmail's send API takes its recipient list from the headers,
+            # so a blind copy has to be declared here - unlike SMTP, where
+            # it is an envelope-only recipient. Gmail strips the Bcc
+            # header before delivery, so it never reaches other recipients.
+            mime["Bcc"] = bcc
         mime["Subject"] = subject
         raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
         try:
