@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import logging
 
-from PySide6.QtCore import Qt, QTimer, QVariantAnimation
+from PySide6.QtCore import QByteArray, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
@@ -234,6 +234,37 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(50, self._startup_integrity_check)
         if self.db.get_accounts():
             QTimer.singleShot(400, self.start_sync)
+
+    # ---------------------------------------------------------------- open
+
+    def open_window(self) -> None:
+        """Show the window the way the user last left it.
+
+        Maximised by default: a mail client is a fill-the-screen tool, and
+        a three-pane layout in a 1360px window on a large display wastes
+        most of it. The restored (un-maximised) size is remembered too, so
+        pressing restore-down gives back the size that was actually being
+        used rather than a hard-coded default.
+        """
+        geometry = self.settings.get("window_geometry")
+        if geometry:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(geometry.encode()))
+            except (ValueError, TypeError):
+                pass
+        if bool(self.settings.get("start_maximized", True)):
+            self.showMaximized()
+        else:
+            self.show()
+
+    def _remember_geometry(self) -> None:
+        # saveGeometry() records the restored size and position even while
+        # maximised, which is exactly what restore-down should return to.
+        self.settings.set(
+            "window_geometry",
+            bytes(self.saveGeometry().toBase64()).decode("ascii"),
+        )
+        self.settings.set("start_maximized", self.isMaximized())
 
     # ------------------------------------------------------------ appearance
 
@@ -1490,6 +1521,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- close
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._remember_geometry()
         self._sync_timer.stop()
         self._reload_timer.stop()
         if self._account_dialog is not None:

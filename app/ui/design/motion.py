@@ -333,6 +333,17 @@ class ValueAnimator(QObject):
     def running(self) -> bool:
         return self._animation.state() == QVariantAnimation.State.Running
 
+    @property
+    def target(self) -> float:
+        """Where the value is heading - the same as `value` once it has
+        arrived. Callers that need to decide something from the state
+        being animated *towards*, rather than from the frame currently on
+        screen, should ask this: mid-flight, `value` is a coordinate, not
+        an answer."""
+        if not self.running:
+            return self._value
+        return float(self._animation.endValue())
+
     def stop(self) -> None:
         self._animation.stop()
 

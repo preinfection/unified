@@ -29,7 +29,7 @@ from app.ui.components import focus as focus_ring
 from app.ui.components.dialog import notify, report_error
 from app.ui.design.theme import theme_manager
 from app.ui.main_window import MainWindow
-from app.ui.startup_window import StartupWindow
+from app.ui.startup_window import STAGES, StartupWindow
 
 log = logging.getLogger(__name__)
 
@@ -41,20 +41,22 @@ class _InitWorker(QThread):
     long the next one will take.
     """
 
-    stage = Signal(str)
+    # (step number, label) - the number drives the startup window's
+    # progress, so it reports a real fraction rather than a barber pole.
+    stage = Signal(int, str)
     ready = Signal(object, object, bool, object)  # db, settings, recovered, unlock_error
     failed = Signal(str)
 
     def run(self) -> None:
         try:
-            self.stage.emit("Checking install...")
+            self.stage.emit(1, STAGES[0])
             migrate_legacy_install()
 
-            self.stage.emit("Unlocking encrypted mailbox...")
+            self.stage.emit(2, STAGES[1])
             data_dir = config.app_data_dir()
             recovered, unlock_error = crypto_store.unlock_database(data_dir)
 
-            self.stage.emit("Loading local cache...")
+            self.stage.emit(3, STAGES[2])
             settings = config.Settings()
             db = Database(config.db_path())
 
@@ -91,14 +93,14 @@ def main() -> int:
     # gives closeEvent something to flush/checkpoint after app.exec() ends.
     state: dict[str, object] = {}
 
-    def on_stage(text: str) -> None:
-        startup.set_stage(text)
+    def on_stage(step: int, text: str) -> None:
+        startup.set_stage(step, text)
 
     def on_ready(db, settings, recovered: bool, unlock_error) -> None:
-        startup.set_stage("Preparing mailbox...")
+        startup.set_stage(4, STAGES[3])
         window = MainWindow(db, settings)
         state["window"] = window
-        window.show()
+        window.open_window()
         startup.close()
 
         if unlock_error:

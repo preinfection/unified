@@ -83,6 +83,12 @@ DEFAULTS = {
     # reduces rather than removes: spatial motion goes, in-place feedback
     # stays. Anyone who needs it can have it in a second.
     "motion_mode": "full",
+    # Window state. Maximised by default - a three-pane mail client in a
+    # 1360px window on a large display wastes most of the screen. The
+    # restored geometry is remembered separately so restore-down returns
+    # to the size that was actually in use.
+    "start_maximized": True,
+    "window_geometry": "",
 }
 
 
