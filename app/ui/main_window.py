@@ -450,9 +450,8 @@ class MainWindow(QMainWindow):
             self._stacked_mode = stacked
             self.preview.set_back_visible(stacked)
             self._apply_stacked_visibility()
-        self.preview.set_compact(
-            stacked or self.panes.sizes()[2] < t.READER_WIDTH_MIN + 120
-        )
+        # The reader decides its own compact state from its own width -
+        # see ReaderPane.resizeEvent.
 
     _user_expanded_sidebar = False
 

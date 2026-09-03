@@ -6,6 +6,68 @@ A full UI/UX redesign. The product does the same things it did in v1.2.1
 and does them behind a new design system, a rebuilt shell, and a set of
 workflows the old interface simply did not have.
 
+### A design direction, not just a system
+
+The palette is a **warm neutral ground with a cool accent** in both
+themes. The reflex answer for a dark desktop tool - a cool grey-blue
+near-black with a blue accent - is what every generated "modern dark
+mode" ships, and it is what v1.2.1 was. Shifting the neutrals warm puts
+the field in tension with the accent, so the accent reads as chosen
+rather than as the only colour present; in light it makes the theme paper
+rather than office white, which is the right material for a surface that
+is almost entirely text. Neither theme uses pure black or white anywhere.
+
+Surfaces are **material**, not flat fills with a grey outline: a raised
+control catches light along its top edge and shades toward the ground
+below it.
+
+### One icon system
+
+All 47 icons were redrawn from zero on a single grid - 24px box, 18px
+live area, one 1.75 stroke, round caps and joins, optical rather than
+geometric sizing. The previous set was two generations mixed together at
+four different stroke widths, which is why it read as messy at the 16px
+the UI actually renders it at. Four glyphs that duplicated another or
+never resolved at small sizes are retired. The app mark is now a solid
+tile with the envelope flap knocked out, because a thin-stroked outline
+turns to mush at 20px.
+
+### A real motion language
+
+Qt Style Sheets have no `transition`, which is why a stylesheet-driven Qt
+app feels dead: every hover, press and selection is an instant swap.
+`app/ui/design/motion.py` ports the [transitions.dev](https://transitions.dev)
+token set to Qt and layers Apple's fluid-interface rules on top - respond
+on press, animate from the presentation value so an interrupted gesture
+is picked up rather than snapped, exits faster than entrances except
+where the motion is symmetric.
+
+What that turned into:
+
+- Buttons paint themselves: press scales to 0.972, hover arrives over
+  130ms, and the focus ring is drawn outside the rect so tabbing along a
+  row moves nothing.
+- A **sliding indicator** in the sidebar and the message list: one marker
+  that travels between rows rather than two marks blinking.
+- Icon swap with real blur (the star filling in, the appearance mode
+  changing), toast rise-and-scale, modal and dropdown open/close
+  asymmetry, page side-by-side for the narrow layout, a skeleton shimmer
+  sweep, number pop-in on unread counts, error shake on an invalid
+  compose field, card resize on the sidebar collapse, and a staggered
+  reveal when a message opens.
+- All of it routed through one reduced-motion check, so the OS setting
+  collapses every duration to zero.
+
+### Typography that has a hierarchy again
+
+A Qt stylesheet's font declarations override every `QFont` set in code,
+so the `* { font-size: 13px }` rule was silently flattening the entire
+ramp: every heading, subject line and dialog title rendered at 13px. The
+base font is now installed with `QApplication.setFont()`. The ramp also
+widens past the dense-metadata cluster (11/12/13/15/18/22/28), so a
+subject line is 22px against 13px body, and sizes at or above 17px use
+Segoe UI Variable Display - the optical cut Windows ships for them.
+
 ### A real design system
 
 Every color, size, radius, duration and type style now comes from one

@@ -6,10 +6,11 @@ locally and encrypted at rest; passwords and OAuth tokens live in the
 Windows Credential Manager, never in a file.
 
 **Version 1.3.0** — a full UI/UX redesign on a new semantic design
-system, with a light theme, keyboard-first navigation, reply/forward, an
-unread filter and a layout that adapts down to a narrow window. See
-[RELEASE_NOTES.md](RELEASE_NOTES.md) for the change log and
-[DESIGN.md](DESIGN.md) for the design system itself.
+system: a warm-ground palette with a cool accent, a light theme, an icon
+set redrawn on one grid, a real motion language, keyboard-first
+navigation, reply/forward, an unread filter, and a layout that adapts
+down to a narrow window. See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the
+change log and [DESIGN.md](DESIGN.md) for the design system itself.
 
 ![Unified in dark mode](assets/screenshot.png)
 
@@ -258,6 +259,12 @@ Other things worth knowing:
 
 - **Appearance** follows Windows light/dark by default. Change it from
   the moon/sun button in the command bar or in Settings → Appearance.
+  Switching is live: the palette, the Qt palette and the stylesheet all
+  move together, so nothing needs a restart.
+- **Motion** is used to convey state, never as decoration. If you have
+  turned off *Show animations* in Windows (Settings → Accessibility →
+  Visual effects), Unified honours it: state still changes, it just does
+  not travel.
 - **List density** (Compact / Cozy / Relaxed) is in the list's ⋯ menu and
   in Settings → Appearance.
 - **Remote images are blocked** until you ask for them, per message — a
@@ -513,6 +520,20 @@ download; press Refresh to retry just those. The count is shown in the
 account's status line in the sidebar.
 
 ---
+
+## Credits
+
+The design system is documented in [DESIGN.md](DESIGN.md). Two parts of
+it are ported rather than invented:
+
+- The motion scale (durations, easings, distances, scales, blur) and the
+  per-transition behaviour are [transitions.dev](https://transitions.dev)
+  by Jakub Antalik, implemented natively in Qt.
+- The interaction rules behind it — respond on press, animate from the
+  presentation value, interruptibility, spatial consistency,
+  size-specific tracking — come from Apple's *Designing Fluid Interfaces*
+  and *The Details of UI Typography*, by way of Emil Kowalski's
+  `apple-design` skill.
 
 ## License
 

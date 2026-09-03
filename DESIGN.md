@@ -67,8 +67,26 @@ and re-tints them (`refresh_button_icons`).
 
 ## 3. Color
 
-Roles are named for **what a color is for**, never for what it looks
-like. `palette.py` is the full list; the shape of it:
+### The direction: warm ground, cool accent
+
+Both palettes are built on a **warm neutral ground with a cool accent**,
+and that is the decision carrying the product's identity.
+
+The reflex answer for a dark desktop tool is a cool grey-blue near-black
+with a blue accent. It is also what every generated "modern dark mode"
+ships (zinc surfaces, white-at-10% hairlines, one unchosen blue) and it is
+what this app used to be. Shifting the neutrals warm (hue near 35 degrees,
+chroma low enough that nobody would call it brown) puts the whole field in
+tension with the cool accent, so the accent reads as *chosen* rather than
+as the only colour present. In light, it makes the theme paper rather than
+office white, which is the right material for a surface that is almost
+entirely text.
+
+Neither theme uses pure black or pure white anywhere, including the toast,
+which is the one deliberately inverted surface in the product.
+
+Roles are named for **what a color is for**, never for what it looks like.
+`palette.py` is the full list; the shape of it:
 
 **Surfaces** — elevation runs *outward from the navigation*, in both
 themes: the sidebar is the most recessed surface, the message list sits
@@ -99,8 +117,14 @@ foreground and a subtle background, plus `danger_strong` for a
 destructive button fill. Status is never communicated by color alone:
 every status surface carries an icon or words as well.
 
-**Domain** — `star` (the one non-semantic hue), `unread`, and a set of
-six to eight muted `avatar_hues`.
+**Material** — `highlight`, `highlight_strong` and `shadow`. Real
+surfaces catch light along their top edge and cast a shadow tinted by the
+ground they sit on. A flat fill with a grey 1px outline is a wireframe of
+a surface, not a surface, and it was the single thing that made the
+previous pass look unfinished.
+
+**Domain** — `star` (the one non-semantic hue), `unread`, and a set of six
+to eight muted `avatar_hues`.
 
 ### Contrast
 
@@ -112,23 +136,30 @@ themes. Adding a role means adding its pairing.
 
 ### Dark is not "black everywhere"
 
-The dark palette is a neutral graphite, not a blue-black: a strongly
-tinted dark theme reads as a skin rather than a product, and it fights
-every message body rendered next to it. The light palette is not the dark
-one inverted — light UI takes more of its structure from borders and less
-from fills, and its surface steps sit closer together.
+The dark palette is a warm graphite: warm enough that the field reads as
+warm next to the accent, never so far that anyone would call it brown, and
+never sitting at the absolute floor of the display. The light palette is
+not the dark one inverted — light UI takes more of its structure from
+borders and less from fills, and its surface steps sit closer together.
 
 ---
 
 ## 4. Typography
 
-A Windows-first system stack: Segoe UI Variable Text → Segoe UI → Inter →
-Arial. Roles are named for the job the text does:
+A Windows-first system stack: Segoe UI Variable Text → Segoe UI → Arial.
+Sizes at and above 17px switch to **Segoe UI Variable Display**, the
+optical cut Windows ships for large text: tighter spacing and finer detail
+than the Text cut, which is drawn for small sizes. Using the right optical
+size is a real typographic decision that costs nothing and is native to
+the platform, unlike downloading whichever grotesk is currently
+fashionable.
+
+Roles are named for the job the text does:
 
 | Role | Size / weight | Used for |
 |---|---|---|
-| `display` / `title` | 24 / 19, semibold | Message subject, splash |
-| `heading` / `subheading` | 16 / 14, semibold | Dialog titles, pane headers |
+| `display` / `title` | 28 / 22, semibold | Message subject, splash |
+| `heading` / `subheading` | 18 / 15, semibold | Dialog titles, pane headers |
 | `body` / `body_strong` | 13, regular / semibold | Message text, field values |
 | `body_sm` | 12, regular | Secondary detail |
 | `caption` | 11, regular | Metadata, status |
@@ -138,9 +169,21 @@ Arial. Roles are named for the job the text does:
 | `preview` | 12, regular | Snippet |
 | `timestamp` | 11, regular | |
 
+**Tracking is size-specific.** Large text tightens (-0.5px at display,
+-0.2px at heading) because letterforms read too far apart as they grow;
+body sits at 0. One `letter-spacing` for every size is wrong somewhere.
+
 Unread mail is **heavier** than read mail — that weight difference is the
 single most important typographic signal in the product, and a test
 enforces it. Read rows drop to secondary text rather than changing hue.
+
+> **A trap worth naming.** A Qt stylesheet's font declarations override
+> every `QFont` set in code. A `* { font-size: 13px }` rule therefore
+> flattens the entire ramp silently: every heading, subject line and
+> dialog title renders at 13px and the hierarchy vanishes. The base font
+> is installed with `QApplication.setFont()` instead, which per-widget
+> fonts can still override. Never put `font-size` or `font-family` in a
+> broad QSS selector.
 
 ---
 
@@ -188,6 +231,19 @@ and platform behavior, and then has to reimplement all of it badly.
 | `reader.py` | The reading pane: no card, no elevation around the body. |
 | `command_bar.py`, `list_header.py`, `sidebar.py`, `nav_pill.py` | The shell. |
 | `avatar.py`, `badge.py`, `dropdown.py`, `search_field.py`, `toggle.py`, `toast.py`, `focus.py` | Primitives. |
+| `design/motion.py` | The motion tokens and the animators every painted component uses. |
+
+### Iconography
+
+One system, no exceptions: a 24px box with an 18px live area, a single
+**1.75 stroke**, round caps and joins, and optical rather than geometric
+sizing (a circle glyph is drawn slightly larger than a square one so they
+read at the same weight). Fills appear only where fullness *is* the
+meaning - a filled star means starred - never as a second style. The
+generator is `.design-research/make_icons.py`; regenerate rather than
+hand-editing an SVG, or the set drifts back into two generations at four
+stroke widths, which is exactly how the previous set became unreadable at
+16px.
 
 ### Where cards are, and are not, used
 
@@ -227,20 +283,67 @@ find a state nobody styled.
 
 ## 8. Motion
 
-Four durations, each with a job: 80ms press, 120ms hover/focus, 180ms
-selection and content swaps, 280ms panels and dialogs. Nothing is longer
-than 280ms; past that the UI is making the user wait to watch an
-animation.
+Qt Style Sheets have no `transition`. That one fact is why a QSS-styled Qt
+app feels dead: every hover, press, check and selection is an instant
+swap. The fix is not more animation, it is a coherent system applied from
+one place, `app/ui/design/motion.py`.
 
-Motion is used where it communicates: the navigation indicator grows
-rather than appearing, dropdowns settle into place, toasts slide in.
-It is not used on list scrolling, pane resizing or anything on the
-critical path of reading mail.
+### Where the values come from
+
+The scale is the **[transitions.dev](https://transitions.dev)** token set
+(Jakub Antalik) ported to Qt, rather than numbers invented here. Its
+values are tuned against shipped implementations of exactly the surfaces
+this app has - dropdowns, modals, toasts, sliding indicators, skeleton
+reveals, icon swaps - so the app inherits an already-argued system.
+Layered on top are the rules from Apple's *Designing Fluid Interfaces*,
+by way of Emil Kowalski's `apple-design` skill.
+
+| Token | Value | Used by |
+|---|---|---|
+| `EASE_SMOOTH_OUT` | `cubic-bezier(0.22, 1, 0.36, 1)` | opens, closes, slides, resizes |
+| `EASE_IN_OUT` | symmetric | icon swap, text swap, reveals |
+| `EASE_BOUNCE_STRONG` | `cubic-bezier(0.34, 3.85, 0.64, 1)` | hover-out settle |
+| press / hover / state | 90 / 130 / 190 ms | interaction feedback |
+| quick / fast / medium / slow | 150 / 250 / 350 / 400 ms | close / open / panel / reveal |
+| stagger | 40 ms per item, 300 ms total cap | entrances |
+
+### The rules
+
+- **Respond on press, not on release.** Feedback starts the instant the
+  pointer goes down.
+- **Animate from the presentation value, never the target.** Every
+  animator restarts from wherever the value currently *is*, so an
+  interaction interrupted mid-flight is picked up rather than snapped.
+- **Exits run at about 70% of entrances** - except where the motion is
+  symmetric by nature (a travelling indicator, a page slide, an icon
+  swap: the same journey either way).
+- **Never animate a keyboard-repeated action.** J/K down the message list
+  happens hundreds of times a day; animating it would make the app feel
+  slower, not richer.
+- **Motion conveys state, never decoration.** Nothing loops, nothing
+  animates on load, and nothing on the critical path of reading mail
+  moves at all.
+
+### What actually animates
+
+| Surface | Transition |
+|---|---|
+| Buttons | press scales to 0.972; hover arrives over 130 ms; focus ring fades in outside the rect |
+| Sidebar and message-list selection | one indicator that **travels** between rows (250 ms, symmetric) |
+| Star, appearance mode | icon swap: the outgoing glyph blurs and shrinks as the incoming one resolves |
+| Toasts | rise 16 px with a 0.97 scale, 350 ms in / 250 ms out, same path both ways |
+| Dialogs, dropdowns | open 250 ms / close 150 ms |
+| Narrow-window pane change | page side-by-side: an 8 px slide in the direction of travel |
+| Sidebar collapse | card resize, 300 ms |
+| First sync | skeleton shimmer sweep, one cycle per 2 s |
+| Unread counts | number pop-in with a slight overshoot |
+| Invalid compose field | error shake, four settling segments |
+| Opening a message | header lines rise, staggered 40 ms |
 
 **Reduced motion** is read from the OS (Windows' "Show animations"
-setting) once, in `ThemeManager`. Components call `t.duration(base)`,
-which returns 0 when the user has asked for less motion — so the state
-still changes, it just does not travel.
+setting) once, in `ThemeManager`. Every animator calls
+`theme_manager.duration(base)`, which returns 0 when the user has asked
+for less motion - so state still changes, it just does not travel.
 
 ---
 
@@ -306,3 +409,27 @@ local part.
   the system is missing something — add it to the system instead.
 - Run `pytest tests/test_design_system.py` — it will tell you if the
   contract broke.
+
+---
+
+## 13. Credits
+
+The design system is Unified's own, but two pieces of it are ported
+rather than invented, and it is worth knowing where to go for the
+reasoning behind them:
+
+- **Motion tokens** — the duration, easing, distance, scale and blur scale
+  in `app/ui/design/motion.py` is [transitions.dev](https://transitions.dev)
+  by Jakub Antalik, ported to Qt. The per-transition behaviour (sliding
+  indicator, icon swap, toast, modal, page side-by-side, skeleton reveal,
+  number pop-in, error shake, card resize, texts reveal) follows that
+  library's specifications.
+- **Interaction rules** — respond on press, animate from the presentation
+  value, interruptibility, spatial consistency, size-specific tracking:
+  Apple's *Designing Fluid Interfaces* and *The Details of UI Typography*,
+  by way of Emil Kowalski's `apple-design` and design-engineering
+  writing.
+
+Neither is vendored as code; both are implemented natively in Qt, because
+none of the CSS mechanisms they assume (`transition`, `filter`,
+`@starting-style`) exist in Qt Style Sheets.

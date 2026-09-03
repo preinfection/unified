@@ -434,6 +434,10 @@ class ReaderPane(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         self._elide_sender_address()
         self._apply_measure()
+        # Decided from this pane's own width rather than from the shell's
+        # view of the splitter, which is not settled during construction
+        # and reported the pane as narrow when it was not.
+        self.set_compact(self.width() < t.READER_WIDTH_MIN + 160)
         super().resizeEvent(event)
 
     def _play_reveal(self) -> None:
