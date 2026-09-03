@@ -43,7 +43,7 @@ class StartupWindow(QWidget):
         col.addStretch(1)
 
         icon_label = QLabel()
-        icon_label.setPixmap(make_mark(40, t.TEXT_PRIMARY))
+        icon_label.setPixmap(make_mark(40, t.ACCENT))
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(icon_label)
         col.addSpacing(t.SPACE_XL)

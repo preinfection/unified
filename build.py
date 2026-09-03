@@ -21,11 +21,13 @@ def generate_icon() -> None:
     """Build a proper multi-resolution .ico for the exe's Windows resource.
 
     A single 256px image saved with an .ico extension only ever contains
-    that one size - Explorer/the taskbar then has to scale it down
+    that one size - Explorer and the taskbar then have to scale it down
     themselves for small contexts, which is exactly what makes app icons
-    go blurry or vanish at 16-24px. Each size here is rendered by
-    app.ui.icons at its own resolution (proportional stroke width, not a
-    scaled-down large one) and assembled into one real multi-size .ico.
+    go blurry or vanish at 16-24px. Each size here is drawn fresh by
+    app.ui.icons at its own resolution, so the corner radius, the flap
+    thickness and the margins stay optically right at 16px as well as at
+    256px, and the 16/20px versions drop the detail that would otherwise
+    merge into a smudge.
     """
     import io
 

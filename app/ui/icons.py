@@ -1,119 +1,44 @@
-"""Programmatically drawn monochrome app icon (no binary assets required).
+"""The application mark, drawn in code at every size Windows asks for.
 
-A padlock where the shackle *is* a bold "U" - not a separate letterform
-placed on top of a generic lock glyph, but the same stroke that would
-normally just be a plain wire loop, shaped and weighted to read as both
-a shackle and a U at once. The legs run down into the lock body rather
-than merely touching it, so the two pieces read as one continuous mark.
+One mark, used everywhere: the window icon, the taskbar, the tray, the
+title bar, the installer, the splash, and the lockup in the command bar.
+Having the OS icon and the in-app mark be two different drawings is how a
+product ends up not recognisable as itself.
 
-Each icon size is drawn fresh rather than scaling one large pixmap down:
-a stroke width that is proportionally thin at 256px becomes sub-pixel
-and all but disappears once Windows shrinks it to a 16-24px taskbar or
-title-bar icon. Both the stroke width AND the gap inside the U use a
-flat pixel minimum (not a pure percentage) for the same reason - a
-percentage-only gap shrinks to sub-pixel at 16px and the two legs merge
-into a solid blob instead of reading as a U.
+The mark is a filled rounded tile with the envelope flap and a line
+knocked out of it. Filled, not stroked, because that is what survives:
+the previous mark was an outlined padlock whose strokes went sub-pixel
+below about 24px and read as a pale smudge in the taskbar. A solid shape
+has no thin parts to lose.
+
+Knocking the flap *out* rather than painting it in a second colour means
+the mark self-contrasts: on a light taskbar the flap reads light, on a
+dark one it reads dark, and the tile carries the brand colour either way.
+No light/dark variants to keep in sync.
+
+Every size is drawn fresh rather than scaled from one large pixmap, so
+the corner radius, the flap thickness and the margins stay optically
+right at 16px as well as at 256px.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPixmap
 
 # Sizes Windows actually requests for a window/taskbar/tray icon.
 ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
-
-def _u_shape(x: float, top: float, width: float, height: float, stroke: float) -> QPainterPath:
-    """A filled "U" silhouette (straight sides, rounded bottom, open top):
-    an outer rounded-bottom shape minus a smaller inner one, built from
-    plain rects/ellipses and boolean ops rather than arcTo(), which needs
-    no reasoning about Qt's angle-sweep direction to get right.
-    """
-    def rounded_bottom(rx: float, rtop: float, rw: float, rheight: float) -> QPainterPath:
-        radius = rw / 2
-        straight_h = max(0.0, rheight - radius)
-        p = QPainterPath()
-        p.addRect(QRectF(rx, rtop, rw, straight_h))
-        p2 = QPainterPath()
-        p2.addEllipse(QRectF(rx, rtop + rheight - 2 * radius, rw, 2 * radius))
-        return p.united(p2)
-
-    outer = rounded_bottom(x, top, width, height)
-    inner = rounded_bottom(x + stroke, top, width - 2 * stroke, height - stroke)
-    return outer.subtracted(inner)
+# The OS icon cannot follow the app's theme - it is drawn once, into a
+# .ico, and shown on a taskbar whose colour this app does not control.
+# So it uses a fixed brand blue that holds up on both a light and a dark
+# taskbar, sitting between the two themes' accents rather than matching
+# either exactly.
+BRAND_MARK = "#3f8ef0"
 
 
-def _draw_icon(size: int) -> QPixmap:
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-    margin = max(1.0, size * 0.08)
-    content = size - 2 * margin
-
-    # Lock body: a wide-ish rounded rectangle, not the near-2:1 elongated
-    # bar the previous envelope shape used - closer to square reads as
-    # properly centered rather than stretched inside a square canvas.
-    body_stroke = max(1.0, round(size * 0.05))
-    body_w = content * 0.80
-    body_h = content * 0.56
-    body_x = (size - body_w) / 2
-    # Qt draws a path's stroke centered on it, so the visible bottom edge
-    # of the body's outline would otherwise overshoot past `margin` by
-    # half the stroke width - inset the path itself so the *painted*
-    # edge, not the path, lands on the same margin the U's top uses.
-    body_y = size - margin - body_stroke / 2 - body_h
-    body_radius = body_w * 0.14
-
-    # A flat minimum (not size-proportional) stroke width and U-gap are
-    # what keep this legible at 16-24px - pure percentages round to 0-1px
-    # and the shape collapses into a blob.
-    stroke = max(2.0, round(size * 0.11))
-    min_gap = max(2.0, size * 0.09)
-    u_width = max(body_w * 0.50, 2 * stroke + min_gap)
-    u_x = (size - u_width) / 2
-    u_top = margin
-    # Legs run a little way into the body rather than just meeting its
-    # top edge, so the shackle and body read as one continuous silhouette
-    # instead of two shapes that happen to touch.
-    u_height = body_y - margin + stroke * 0.5
-
-    shackle = _u_shape(u_x, u_top, u_width, u_height, stroke)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(Qt.GlobalColor.black)
-    painter.drawPath(shackle)
-
-    painter.setPen(QPen(Qt.GlobalColor.black, body_stroke))
-    painter.setBrush(Qt.GlobalColor.white)
-    painter.drawRoundedRect(QRectF(body_x, body_y, body_w, body_h), body_radius, body_radius)
-
-    painter.end()
-    return pixmap
-
-
-def make_mark(size: int, ink: str, ground: str | None = None) -> QPixmap:
-    """The in-app mark: a filled tile with the envelope flap knocked out.
-
-    The window/taskbar icon has to survive any wallpaper, so it is a
-    two-tone outlined padlock. That shape turns to mush at the 20px the
-    command bar renders it at - thin strokes go sub-pixel and it reads as
-    a small pale block.
-
-    A mark that has to work at 20px has to be *solid*. So this one is a
-    filled squircle carrying a knocked-out flap: one shape, one color, no
-    stroke to lose. It reads as mail instantly, and it is the only place
-    in the chrome that carries the accent, which gives the window a color
-    anchor without decorating anything.
-    """
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
+def _mark_path(size: int) -> tuple[QPainterPath, QPainterPath]:
+    """(tile, knockout) for a mark drawn into a `size` x `size` box."""
     inset = size * 0.02
     box = QRectF(inset, inset, size - 2 * inset, size - 2 * inset)
     radius = box.width() * 0.28
@@ -121,42 +46,72 @@ def make_mark(size: int, ink: str, ground: str | None = None) -> QPixmap:
     tile = QPainterPath()
     tile.addRoundedRect(box, radius, radius)
 
-    # The flap: a wide, shallow V knocked out of the upper half. Shallow
-    # on purpose - a deep V reads as a chevron, not a letter.
-    pad = box.width() * 0.22
-    top = box.top() + box.height() * 0.30
-    mid = box.top() + box.height() * 0.58
-    thickness = max(1.4, box.width() * 0.115)
+    # Below this the flap and the bar are too close to stay apart, so the
+    # bar is dropped and the flap alone carries the mark. Detail that
+    # merges into a blur is worse than no detail: it just makes the tile
+    # look smudged.
+    detailed = size >= 24
 
-    flap = QPainterPath()
-    flap.moveTo(box.left() + pad, top)
-    flap.lineTo(box.center().x(), mid)
-    flap.lineTo(box.right() - pad, top)
-    flap.lineTo(box.right() - pad, top + thickness)
-    flap.lineTo(box.center().x(), mid + thickness)
-    flap.lineTo(box.left() + pad, top + thickness)
-    flap.closeSubpath()
+    # The flap: a wide, shallow V. Shallow on purpose - a deep V reads as
+    # a chevron rather than as the fold of an envelope. The thickness has
+    # a flat pixel floor as well as a percentage, because a percentage
+    # alone goes sub-pixel at 16px and the knockout disappears.
+    pad = box.width() * (0.20 if detailed else 0.17)
+    top = box.top() + box.height() * (0.30 if detailed else 0.32)
+    mid = box.top() + box.height() * (0.58 if detailed else 0.64)
+    thickness = max(2.0, box.width() * (0.115 if detailed else 0.135))
 
-    # A second, shorter stroke below it reads as the body of the letter.
-    line_y = mid + thickness * 1.9
+    knockout = QPainterPath()
+    knockout.moveTo(box.left() + pad, top)
+    knockout.lineTo(box.center().x(), mid)
+    knockout.lineTo(box.right() - pad, top)
+    knockout.lineTo(box.right() - pad, top + thickness)
+    knockout.lineTo(box.center().x(), mid + thickness)
+    knockout.lineTo(box.left() + pad, top + thickness)
+    knockout.closeSubpath()
+
+    if not detailed:
+        return tile, knockout
+
+    # A shorter bar below it reads as the body of the letter.
+    line_y = mid + thickness * 2.0
     body = QPainterPath()
     body.addRoundedRect(
         QRectF(box.left() + pad, line_y, box.width() - 2 * pad, thickness),
         thickness / 2, thickness / 2,
     )
+    return tile, knockout.united(body)
 
+
+def make_mark(size: int, ink: str) -> QPixmap:
+    """The mark at `size`, in `ink`, with the flap knocked out to
+    transparent. Used in-app, where `ink` is the active theme's accent."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    tile, knockout = _mark_path(size)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(ink))
-    painter.drawPath(tile.subtracted(flap).subtracted(body))
+    painter.drawPath(tile.subtracted(knockout))
     painter.end()
     return pixmap
 
 
+def _draw_icon(size: int) -> QPixmap:
+    """One size of the OS icon. Kept under this name because build.py
+    renders each size through it when assembling the multi-size .ico."""
+    return make_mark(size, BRAND_MARK)
+
+
 def make_app_icon(size: int = 256) -> QIcon:
-    """Multi-resolution black-and-white U-in-padlock icon for window/
-    taskbar/tray. White fill + black stroke (not a single solid color)
-    is deliberate: it self-contrasts against both light and dark
-    backgrounds without needing separate light/dark variants."""
+    """The multi-resolution window/taskbar/tray icon.
+
+    The same mark the command bar shows, so the thing in the taskbar and
+    the thing in the window are recognisably one product.
+    """
     icon = QIcon()
     for s in ICON_SIZES:
         icon.addPixmap(_draw_icon(s))

@@ -192,13 +192,15 @@ QLineEdit[invalid="true"], QSpinBox[invalid="true"], QComboBox[invalid="true"] {
 }
 QLineEdit[readOnly="true"] { background: $canvas; color: $text_secondary; }
 
-QLineEdit[shape="pill"] {
-    border-radius: ${radius_pill}px;
-    padding: 0 ${space_lg}px;
+/* The search field paints itself - Qt does not anti-alias a QSS
+   border-radius, and a pill drawn by the stylesheet has visibly stepped
+   corners. See components/search_field.py. */
+QLineEdit#searchField {
+    background: transparent;
+    border: none;
+    padding: 0;
 }
-QLineEdit[shape="pill"]:focus { padding: 0 ${space_md}px; }
-QLineEdit[surface="raised"] { background: $surface_hover; border-color: transparent; }
-QLineEdit[surface="raised"]:hover { border-color: $border; }
+QLineEdit#searchField:focus { border: none; padding: 0; }
 
 /* Real, styled steppers. Hiding them entirely (width: 0) leaves a
    number field that can only be changed by typing, which is a usability
