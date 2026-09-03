@@ -339,6 +339,11 @@ class AccountDialog(AppDialog):
 
     # ---------------------------------------------------------- provider
 
+    def select_provider(self, provider: int) -> None:
+        """Open already on a provider - used when the choice was made on
+        the welcome surface, so the dialog does not ask again."""
+        self._select_provider(provider)
+
     def _select_provider(self, provider: int) -> None:
         if self.is_busy:
             return

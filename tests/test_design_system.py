@@ -196,18 +196,51 @@ def test_motion_durations_are_ordered_and_short():
     )
 
 
-def test_reduced_motion_collapses_every_animation():
-    """One switch, honored everywhere: components ask t.duration() rather
-    than each re-checking the OS setting (and one of them forgetting)."""
+def test_reduced_motion_reduces_motion_rather_than_deleting_it():
+    """One switch, honored everywhere - and it *reduces*.
+
+    Windows' "Show animations" setting is off on a great many machines,
+    turned off for perceived speed rather than for motion sensitivity.
+    Reading it as "remove every animation" silently deletes the whole
+    motion design on those machines, which is exactly what it used to do.
+    So spatial motion goes to zero and in-place feedback survives,
+    shortened: a button still acknowledges a press, nothing travels.
+    """
     manager = t.theme_manager
-    original = manager._reduced_motion
+    original = manager.motion_mode
     try:
-        manager._reduced_motion = True
+        manager.set_motion_mode(t.MOTION_REDUCED)
+        assert manager.reduced_motion
         assert manager.duration(tokens.DURATION_SLOW) == 0
-        manager._reduced_motion = False
+        feedback = manager.duration(tokens.DURATION_SLOW, spatial=False)
+        assert 0 < feedback <= 150, (
+            "in-place feedback must survive reduced motion, shortened"
+        )
+
+        manager.set_motion_mode(t.MOTION_FULL)
+        assert not manager.reduced_motion
         assert manager.duration(tokens.DURATION_SLOW) == tokens.DURATION_SLOW
+        assert manager.duration(
+            tokens.DURATION_SLOW, spatial=False
+        ) == tokens.DURATION_SLOW
     finally:
-        manager._reduced_motion = original
+        manager.set_motion_mode(original)
+
+
+def test_motion_mode_can_override_the_system_preference():
+    """The OS setting is a default, not a verdict: someone who wants the
+    interface to move must be able to say so."""
+    manager = t.theme_manager
+    original = manager.motion_mode
+    try:
+        manager.set_motion_mode(t.MOTION_FULL)
+        assert manager.duration(tokens.DURATION_SLOW) == tokens.DURATION_SLOW
+        manager.set_motion_mode(t.MOTION_REDUCED)
+        assert manager.duration(tokens.DURATION_SLOW) == 0
+        manager.set_motion_mode(t.MOTION_SYSTEM)
+        assert manager.reduced_motion == manager.system_reduced_motion
+    finally:
+        manager.set_motion_mode(original)
 
 
 def test_typography_roles_are_named_for_their_job():
@@ -446,9 +479,9 @@ def test_nav_indicator_travels_between_rows_rather_than_blinking(qapp):
     from app.ui.components.nav_pill import NavList, NavPill
 
     manager = t.theme_manager
-    original = manager._reduced_motion
+    original = manager.motion_mode
     try:
-        manager._reduced_motion = False
+        manager.set_motion_mode(t.MOTION_FULL)
         nav = NavList()
         for label in ("Inbox", "Starred", "Sent"):
             item = NavPill(label)
@@ -479,7 +512,7 @@ def test_nav_indicator_travels_between_rows_rather_than_blinking(qapp):
             "the indicator never arrived"
         )
     finally:
-        manager._reduced_motion = original
+        manager.set_motion_mode(original)
 
 
 def test_unread_and_read_rows_share_one_left_edge(qapp):

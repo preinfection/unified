@@ -40,6 +40,17 @@ MODE_DARK = "dark"
 MODE_LIGHT = "light"
 MODES = (MODE_SYSTEM, MODE_LIGHT, MODE_DARK)
 
+# How much the interface is allowed to move.
+MOTION_SYSTEM = "system"   # follow the OS "Show animations" setting
+MOTION_FULL = "full"       # everything animates
+MOTION_REDUCED = "reduced"  # no spatial motion; feedback still fades
+MOTION_MODES = (MOTION_SYSTEM, MOTION_FULL, MOTION_REDUCED)
+
+# Under reduced motion a non-spatial transition is shortened rather than
+# removed - long enough to read as a transition, short enough that nobody
+# waiting on it notices.
+_REDUCED_CAP_MS = 110
+
 
 def _windows_prefers_light() -> bool | None:
     """Windows' per-app light/dark preference, or None if unknowable."""
@@ -95,7 +106,9 @@ class ThemeManager(QObject):
         self._mode = MODE_SYSTEM
         self._palette = self._resolve(MODE_SYSTEM)
         self._density = tokens.DENSITY_DEFAULT
-        self._reduced_motion = _system_reduced_motion()
+        # See config.DEFAULTS["motion_mode"] for why this is not SYSTEM.
+        self._motion_mode = MOTION_FULL
+        self._system_reduced = _system_reduced_motion()
 
     # ------------------------------------------------------------ palette
 
@@ -161,15 +174,52 @@ class ThemeManager(QObject):
     # ------------------------------------------------------------- motion
 
     @property
-    def reduced_motion(self) -> bool:
-        return self._reduced_motion
+    def motion_mode(self) -> str:
+        return self._motion_mode
 
-    def duration(self, base_ms: int) -> int:
-        """The duration an animation should actually run for. Returns 0
-        when the OS asks for reduced motion, so every animated component
-        can call this instead of each one re-checking the setting (and
-        one of them forgetting)."""
-        return 0 if self._reduced_motion else base_ms
+    def set_motion_mode(self, mode: str) -> None:
+        if mode not in MOTION_MODES:
+            raise ValueError(f"unknown motion mode: {mode!r}")
+        self._motion_mode = mode
+
+    @property
+    def reduced_motion(self) -> bool:
+        """Whether the interface should hold still.
+
+        Reduced does not mean *still*: see `duration`. This answers "is
+        the app in its quiet mode", which is what a component asks before
+        starting something that loops or travels.
+        """
+        if self._motion_mode == MOTION_FULL:
+            return False
+        if self._motion_mode == MOTION_REDUCED:
+            return True
+        return self._system_reduced
+
+    @property
+    def system_reduced_motion(self) -> bool:
+        """What the OS asked for, regardless of the app's own setting."""
+        return self._system_reduced
+
+    def duration(self, base_ms: int, *, spatial: bool = True) -> int:
+        """How long an animation should actually run.
+
+        `spatial=True` (the default) means the animation moves something
+        across the screen - a travelling indicator, a sliding pane, a
+        rising toast. Those are what reduced motion is *for*, and they go
+        to zero.
+
+        `spatial=False` means it only changes opacity or colour in place:
+        a button acknowledging a press, a hover arriving, an icon
+        cross-fading. Those stay under reduced motion, shortened, because
+        they aid comprehension and move nothing.
+
+        Every animated component calls this rather than checking the
+        preference itself, so the policy lives in exactly one place.
+        """
+        if not self.reduced_motion:
+            return base_ms
+        return 0 if spatial else min(base_ms, _REDUCED_CAP_MS)
 
     # -------------------------------------------------------------- apply
 

@@ -134,6 +134,7 @@ class SettingsDialog(AppDialog):
         # be able to put them back exactly as they were.
         self._original_theme = t.theme_manager.mode
         self._original_density = t.theme_manager.density
+        self._original_motion = t.theme_manager.motion_mode
 
         body = QHBoxLayout()
         body.setSpacing(t.SPACE_2XL)
@@ -188,6 +189,21 @@ class SettingsDialog(AppDialog):
         )
         self.density_dropdown.changed.connect(t.theme_manager.set_density)
 
+        self.motion_dropdown = Dropdown(
+            [("Match Windows", t.MOTION_SYSTEM), ("Full", t.MOTION_FULL),
+             ("Reduced", t.MOTION_REDUCED)],
+            current=t.theme_manager.motion_mode,
+        )
+        self.motion_dropdown.changed.connect(t.theme_manager.set_motion_mode)
+
+        # Say what Windows is currently asking for, because "Match
+        # Windows" is meaningless if you cannot see what it matched.
+        following = (
+            "Windows currently asks for reduced motion."
+            if t.theme_manager.system_reduced_motion
+            else "Windows currently allows animation."
+        )
+
         return _page(
             SectionHeader("Appearance"),
             _panel(
@@ -198,6 +214,11 @@ class SettingsDialog(AppDialog):
                 _row(
                     "Message list density", self.density_dropdown,
                     "How much detail each row in the message list shows.",
+                ),
+                _row(
+                    "Motion", self.motion_dropdown,
+                    "Reduced keeps the feedback that helps you read the "
+                    f"interface and drops the movement. {following}",
                 ),
             ),
         )
@@ -439,10 +460,12 @@ class SettingsDialog(AppDialog):
         self.settings.set("messages_shown", self.shown_spin.value())
         self.settings.set("theme_mode", t.theme_manager.mode)
         self.settings.set("list_density", t.theme_manager.density)
+        self.settings.set("motion_mode", t.theme_manager.motion_mode)
         self.accept()
 
     def reject(self) -> None:
         # Appearance previews live; cancelling must undo them.
         t.theme_manager.set_mode(self._original_theme)
         t.theme_manager.set_density(self._original_density)
+        t.theme_manager.set_motion_mode(self._original_motion)
         super().reject()

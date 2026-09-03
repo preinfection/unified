@@ -68,6 +68,21 @@ DEFAULTS = {
     # density controls how many lines each message row shows.
     "theme_mode": "system",
     "list_density": "cozy",
+    # How much the interface animates: "full", "system" or "reduced".
+    #
+    # Defaults to "full" rather than "system", deliberately. Windows'
+    # "Show animations" switch is as much a perceived-performance toggle
+    # as an accessibility one - a great many machines have it off for
+    # speed - and following it by default silently deletes the product's
+    # entire motion design on those machines. Unified's motion is short
+    # (nothing over 350ms), never loops, and never blocks input, so
+    # honouring that switch by default costs far more than it protects.
+    #
+    # "Match Windows" is one click away in Settings > Appearance, is
+    # labelled with what Windows is currently asking for, and still
+    # reduces rather than removes: spatial motion goes, in-place feedback
+    # stays. Anyone who needs it can have it in a second.
+    "motion_mode": "full",
 }
 
 

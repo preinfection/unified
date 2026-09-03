@@ -234,6 +234,10 @@ class StateAnimator(QObject):
     than snapped), and honours the OS reduced-motion preference.
     """
 
+    # Channels that only change colour or opacity in place. These survive
+    # reduced motion (shortened), because nothing about them travels.
+    NON_SPATIAL = frozenset({"hover", "focus", "check", "select", "fade"})
+
     def __init__(self, widget, **channels: int):
         super().__init__(widget)
         self._widget = widget
@@ -274,7 +278,7 @@ class StateAnimator(QObject):
         base = duration or self._durations.get(name, DURATION_STATE)
         if exiting:
             base = int(base * DURATION_EXIT)
-        ms = theme_manager.duration(base)
+        ms = theme_manager.duration(base, spatial=name not in self.NON_SPATIAL)
         if ms <= 0:
             self.set_now(name, target)
             return
@@ -307,11 +311,16 @@ class ValueAnimator(QObject):
 
     def __init__(self, widget, value: float = 0.0,
                  duration: int = DURATION_STATE,
-                 easing: QEasingCurve | None = None):
+                 easing: QEasingCurve | None = None,
+                 *, spatial: bool = True):
         super().__init__(widget)
         self._widget = widget
         self._value = value
         self._duration = duration
+        # Whether this value moves something across the screen. A pure
+        # cross-fade sets spatial=False and keeps working under reduced
+        # motion; a travelling indicator does not.
+        self._spatial = spatial
         self._animation = QVariantAnimation(self)
         self._animation.setEasingCurve(easing or EASE_SMOOTH_OUT)
         self._animation.valueChanged.connect(self._on_value)
@@ -338,7 +347,9 @@ class ValueAnimator(QObject):
 
         if abs(self._value - target) < 0.001:
             return
-        ms = theme_manager.duration(duration or self._duration)
+        ms = theme_manager.duration(
+            duration or self._duration, spatial=self._spatial
+        )
         if ms <= 0:
             self.set_now(target)
             return
@@ -398,11 +409,11 @@ def shake(widget, on_offset, *, distance: int = DISTANCE_SMALL,
 
 def fade_in(widget, *, duration: int = DURATION_PANEL,
             start: float = 0.0) -> QVariantAnimation | None:
-    """Fade a top-level widget in. Returns the animation so a caller can
-    keep it alive; None when reduced motion is on."""
+    """Fade a top-level widget in. A pure opacity change, so it survives
+    reduced motion in shortened form."""
     from app.ui.design.theme import theme_manager
 
-    ms = theme_manager.duration(duration)
+    ms = theme_manager.duration(duration, spatial=False)
     if ms <= 0:
         widget.setWindowOpacity(1.0)
         return None

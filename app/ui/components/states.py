@@ -19,7 +19,7 @@ layout from jumping when they do and reads as "loading" without a word.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -39,10 +39,17 @@ _ICON_SIZE = 28
 
 
 def _wrapping(label: QLabel, width: int) -> QLabel:
-    """A word-wrapped QLabel pinned to a fixed measure."""
+    """A word-wrapped QLabel with a maximum measure.
+
+    Maximum, not fixed: a fixed width keeps its 340px inside a 300px pane
+    and the sentence runs off the edge mid-word, which is exactly what a
+    narrow window used to do to every empty state in the app.
+    """
     label.setWordWrap(True)
-    label.setFixedWidth(width)
-    label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+    label.setMaximumWidth(width)
+    label.setMinimumWidth(0)
+    label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+    label.setProperty("measure", width)
     return label
 
 
@@ -52,14 +59,18 @@ def _set_wrapped(label: QLabel, text: str) -> None:
     A word-wrapped QLabel reports a single line as its size hint, and a
     nested layout does not consult heightForWidth on its behalf - so
     without this the second line of every empty/error message is painted
-    over whatever sits underneath it. Measuring against the label's own
-    fixed width is deterministic, unlike hoping a size policy propagates
-    through two layouts.
+    over whatever sits underneath it. Measured against whatever width the
+    label actually has, which is why the measure is a maximum.
     """
     label.setText(text)
-    label.setMinimumHeight(
-        label.heightForWidth(label.width() or label.maximumWidth())
-    )
+    # Prefer the measure the label was designed for; fall back to the
+    # width it has been given only when that is narrower. Using width()
+    # alone makes a label wrap at whatever it happened to be before its
+    # first layout, which is how a 420px line ends up broken into four.
+    measure = label.property("measure") or label.maximumWidth()
+    if label.width():
+        measure = min(measure, label.width()) if label.width() > 80 else measure
+    label.setMinimumHeight(label.heightForWidth(max(120, int(measure))))
 
 
 class _CenteredPanel(QWidget):
@@ -106,6 +117,16 @@ class EmptyState(_CenteredPanel):
 
         self._icon_name = "inbox"
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        # Re-measure on resize: the copy reflows with the pane it lives
+        # in rather than staying at whatever width it was born with.
+        super().resizeEvent(event)
+        measure = min(340, max(180, self.width() - t.SPACE_4XL * 2))
+        self._detail.setFixedWidth(measure)
+        self._detail.setProperty("measure", measure)
+        if self._detail.text():
+            _set_wrapped(self._detail, self._detail.text())
+
     def set_state(
         self, *, icon: str, title: str, detail: str = "",
         action_text: str = "", on_action=None,
@@ -128,6 +149,155 @@ class EmptyState(_CenteredPanel):
 
     def refresh_icon(self) -> None:
         self._icon.setPixmap(themed_pixmap(self._icon_name, _ICON_SIZE, "quiet"))
+
+
+class WelcomeState(_CenteredPanel):
+    """The first thing a new user sees.
+
+    An app with no accounts used to show two competing empty states -
+    "Connect your first account" in the list and "No message selected" in
+    the reader - across a mostly blank window. Two apologies is not an
+    onboarding.
+
+    This replaces both: one surface across the whole content area with
+    the product mark, one sentence, and the two ways in as real choices
+    rather than a single button that opens a dialog that then asks the
+    same question again.
+    """
+
+    provider_chosen = Signal(int)  # 0 = Gmail, 1 = IMAP
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.column.setSpacing(t.SPACE_LG)
+
+        self._mark = QLabel()
+        self._mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.column.addWidget(self._mark, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.column.addSpacing(t.SPACE_XS)
+
+        title = QLabel("Welcome to Unified")
+        title.setFont(t.make_font("title"))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.column.addWidget(title)
+
+        subtitle = _wrapping(
+            QLabel("Connect an account and Unified brings its mail into one "
+                   "mailbox, cached on this computer and encrypted at rest."),
+            420,
+        )
+        subtitle.setProperty("tone", "secondary")
+        subtitle.setFont(t.make_font("body"))
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.column.addWidget(subtitle, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._subtitle = subtitle
+        self.column.addSpacing(t.SPACE_XL)
+
+        for provider, icon, name, detail in (
+            (0, "mail", "Gmail",
+             "Sign in with Google. No password is stored."),
+            (1, "folder", "Other mailbox",
+             "Any provider with IMAP and SMTP."),
+        ):
+            card = _ProviderChoice(provider, icon, name, detail)
+            card.chosen.connect(self.provider_chosen.emit)
+            self.column.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        note = _wrapping(
+            QLabel("Passwords and sign-in tokens are kept in the Windows "
+                   "Credential Manager, never in a file."),
+            420,
+        )
+        note.setProperty("tone", "tertiary")
+        note.setFont(t.make_font("caption"))
+        note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.column.addSpacing(t.SPACE_MD)
+        self.column.addWidget(note, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._note = note
+
+        self.refresh_icon()
+
+    def refresh_icon(self) -> None:
+        from app.ui.icons import make_mark
+
+        self._mark.setPixmap(make_mark(44, t.ACCENT))
+        for child in self.findChildren(_ProviderChoice):
+            child.refresh_icon()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # The copy measure narrows with the pane rather than staying at
+        # its design width and running off the edge.
+        measure = min(420, max(220, self.width() - t.SPACE_6XL * 2))
+        for label in (self._subtitle, self._note):
+            # Fixed, not maximum: a centre-aligned layout hands a wrapped
+            # label its *sizeHint* width, which for wrapped text is far
+            # narrower than the measure - so the copy has to be told how
+            # wide it is on every resize.
+            label.setFixedWidth(measure)
+            label.setProperty("measure", measure)
+            _set_wrapped(label, label.text())
+        for card in self.findChildren(_ProviderChoice):
+            card.setFixedWidth(measure)
+
+
+class _ProviderChoice(QWidget):
+    """One way in. A card earns its keep here: this genuinely is a set of
+    alternatives to compare, which is the one place a card is a container
+    rather than decoration."""
+
+    chosen = Signal(int)
+
+    def __init__(self, provider: int, icon: str, name: str, detail: str,
+                 parent=None):
+        super().__init__(parent)
+        self._provider = provider
+        self._icon_name = icon
+        self.setProperty("role", "card")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setFixedWidth(420)
+        self.setAccessibleName(f"{name}. {detail}")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(t.SPACE_XL, t.SPACE_LG, t.SPACE_XL, t.SPACE_LG)
+        row.setSpacing(t.SPACE_LG)
+
+        self._icon = QLabel()
+        row.addWidget(self._icon, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        column = QVBoxLayout()
+        column.setSpacing(1)
+        heading = QLabel(name)
+        heading.setFont(t.make_font("body_strong"))
+        column.addWidget(heading)
+        note = QLabel(detail)
+        note.setProperty("tone", "secondary")
+        note.setFont(t.make_font("body_sm"))
+        column.addWidget(note)
+        row.addLayout(column, stretch=1)
+
+        self._chevron = QLabel()
+        row.addWidget(self._chevron, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.refresh_icon()
+
+    def refresh_icon(self) -> None:
+        self._icon.setPixmap(themed_pixmap(self._icon_name, t.ICON_LG, "accent"))
+        self._chevron.setPixmap(themed_pixmap("chevron_right", t.ICON_SM, "quiet"))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.chosen.emit(self._provider)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.chosen.emit(self._provider)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class ErrorState(_CenteredPanel):

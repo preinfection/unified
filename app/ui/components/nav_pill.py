@@ -194,7 +194,7 @@ class NavList(QWidget):
         self._height = ValueAnimator(self, 0.0, motion.TABS_DURATION,
                                      motion.EASE_SMOOTH_OUT)
         self._presence = ValueAnimator(self, 0.0, motion.DURATION_FAST,
-                                       motion.EASE_SMOOTH_OUT)
+                                       motion.EASE_SMOOTH_OUT, spatial=False)
         # Whether the indicator has ever been positioned. The first
         # placement lands, later ones travel - gating on the fade-in
         # progress instead would make a fast second click jump.
@@ -245,6 +245,7 @@ class NavList(QWidget):
         item = self._items[index]
         top = float(item.y())
         height = float(item.height())
+        first = not self._placed
         if animate and self._placed:
             self._y.to(top)
             self._height.to(height)
@@ -252,7 +253,12 @@ class NavList(QWidget):
             self._y.set_now(top)
             self._height.set_now(height)
         self._placed = True
-        self._presence.to(1.0, duration=motion.DURATION_FAST)
+        if first or not animate:
+            # Nothing to fade in from on the first placement, and an
+            # explicit animate=False means "be there already".
+            self._presence.set_now(1.0)
+        else:
+            self._presence.to(1.0, duration=motion.DURATION_FAST)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

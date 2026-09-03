@@ -261,10 +261,12 @@ Other things worth knowing:
   the moon/sun button in the command bar or in Settings → Appearance.
   Switching is live: the palette, the Qt palette and the stylesheet all
   move together, so nothing needs a restart.
-- **Motion** is used to convey state, never as decoration. If you have
-  turned off *Show animations* in Windows (Settings → Accessibility →
-  Visual effects), Unified honours it: state still changes, it just does
-  not travel.
+- **Motion** conveys state, never decoration: nothing loops, nothing
+  animates on load, and nothing takes longer than 350ms. It is a setting
+  under **Settings → Appearance → Motion** — *Full* (the default), *Match
+  Windows*, or *Reduced*. The two quieter options drop movement (slides,
+  travel, rises) but keep the in-place feedback that makes controls feel
+  responsive.
 - **List density** (Compact / Cozy / Relaxed) is in the list's ⋯ menu and
   in Settings → Appearance.
 - **Remote images are blocked** until you ask for them, per message — a

@@ -340,10 +340,35 @@ by way of Emil Kowalski's `apple-design` skill.
 | Invalid compose field | error shake, four settling segments |
 | Opening a message | header lines rise, staggered 40 ms |
 
-**Reduced motion** is read from the OS (Windows' "Show animations"
-setting) once, in `ThemeManager`. Every animator calls
-`theme_manager.duration(base)`, which returns 0 when the user has asked
-for less motion - so state still changes, it just does not travel.
+### Reduced motion reduces motion; it does not delete it
+
+`ThemeManager.duration(base, spatial=...)` is the single place the policy
+lives, and it makes a distinction that matters:
+
+- **Spatial** motion moves something across the screen: a travelling
+  indicator, a sliding pane, a rising toast. Under reduced motion these
+  go to **zero**. That is what reduced motion is for.
+- **Non-spatial** motion only changes opacity or colour in place: a
+  button acknowledging a press, a hover arriving, an icon cross-fading.
+  These **survive**, capped at 110ms, because they aid comprehension and
+  move nothing. Removing them does not help anyone; it just makes the app
+  feel broken.
+
+**Motion is a setting** (Settings → Appearance → Motion): *Full*, *Match
+Windows*, or *Reduced*, and the setting's description states what Windows
+is currently asking for, because "Match Windows" is meaningless if you
+cannot see what it matched.
+
+**The default is Full, not Match Windows** - a deliberate, arguable call.
+Windows' "Show animations" switch (`SPI_GETCLIENTAREAANIMATION`) is as
+much a perceived-performance toggle as an accessibility one, and a great
+many machines have it off for speed. Following it by default silently
+deletes the entire motion design on those machines, which is exactly what
+this app did before this was fixed. Unified's motion is short (nothing
+over 350ms), never loops, and never blocks input, so the cost of ignoring
+that switch by default is low and the cost of obeying it is the whole
+design. Anyone who needs less can select *Match Windows* or *Reduced* in
+one click, and both still keep the in-place feedback.
 
 ---
 

@@ -125,7 +125,7 @@ class Button(QPushButton):
         # whichever way the state went.
         self._outgoing_icon: str | None = None
         self._swap = ValueAnimator(self, 0.0, motion.ICON_SWAP,
-                                   motion.EASE_IN_OUT)
+                                   motion.EASE_IN_OUT, spatial=False)
         self.toggled.connect(
             lambda on: self._anim.to("check", 1.0 if on else 0.0, exiting=not on)
         )

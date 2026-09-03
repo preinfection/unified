@@ -35,6 +35,10 @@ from app.ui.design.theme import (
     MODE_LIGHT,
     MODE_SYSTEM,
     MODES,
+    MOTION_FULL,
+    MOTION_MODES,
+    MOTION_REDUCED,
+    MOTION_SYSTEM,
     repolish,
     set_variant,
     theme_manager,
@@ -249,9 +253,14 @@ def is_dark() -> bool:
     return theme_manager.is_dark
 
 
-def duration(base_ms: int) -> int:
-    """Animation duration, honouring the OS reduced-motion preference."""
-    return theme_manager.duration(base_ms)
+def duration(base_ms: int, *, spatial: bool = True) -> int:
+    """Animation duration, honouring the reduced-motion preference.
+
+    `spatial=False` marks a transition that only changes opacity or
+    colour in place; those survive reduced motion in shortened form. See
+    ThemeManager.duration.
+    """
+    return theme_manager.duration(base_ms, spatial=spatial)
 
 
 def row_height() -> int:

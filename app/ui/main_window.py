@@ -86,7 +86,13 @@ from app.ui.components.email_list import EmailListView, format_full_time, format
 from app.ui.components.list_header import ListHeader
 from app.ui.components.reader import ReaderPane
 from app.ui.components.sidebar import SidebarWidget
-from app.ui.components.states import EmptyState, ErrorState, LoadingState, SkeletonList
+from app.ui.components.states import (
+    EmptyState,
+    ErrorState,
+    LoadingState,
+    SkeletonList,
+    WelcomeState,
+)
 from app.ui.components.toast import ToastHost
 from app.ui.compose_dialog import (
     ComposeDialog,
@@ -125,7 +131,7 @@ VIEW_TITLES = {
 _REMOTE_SEARCH_MIN_CHARS = 3
 
 # Center-pane pages, in the order they are added to the stack.
-PAGE_LIST, PAGE_LOADING, PAGE_EMPTY, PAGE_ERROR = range(4)
+PAGE_LIST, PAGE_LOADING, PAGE_EMPTY, PAGE_ERROR, PAGE_WELCOME = range(5)
 
 
 def _decode_attachments(msg: dict) -> list[dict]:
@@ -234,18 +240,24 @@ class MainWindow(QMainWindow):
     def _apply_saved_appearance(self) -> None:
         mode = str(self.settings.get("theme_mode") or "system")
         density = str(self.settings.get("list_density") or t.DENSITY_DEFAULT)
+        motion_mode = str(self.settings.get("motion_mode") or "system")
         if mode in t.MODES:
             t.theme_manager.set_mode(mode)
         if density in t.DENSITY_METRICS:
             t.theme_manager.set_density(density)
+        if motion_mode in t.MOTION_MODES:
+            t.theme_manager.set_motion_mode(motion_mode)
 
     def _on_theme_changed(self) -> None:
         """Rasterized icons do not follow a palette swap on their own, and
         the window caption is drawn by the OS - both need a nudge."""
         apply_dark_titlebar(self)
         refresh_button_icons(self)
-        for widget in (self.toolbar, self.sidebar, self.list_header, self.preview):
-            refresh = getattr(widget, "refresh_icons", None)
+        for widget in (self.toolbar, self.sidebar, self.list_header,
+                       self.preview, self.welcome_state):
+            refresh = getattr(widget, "refresh_icons", None) or getattr(
+                widget, "refresh_icon", None
+            )
             if callable(refresh):
                 refresh()
         self.email_list.viewport().update()
@@ -352,12 +364,15 @@ class MainWindow(QMainWindow):
         self.empty_state = EmptyState()
         self.error_state = ErrorState()
         self.skeleton = SkeletonList()
+        self.welcome_state = WelcomeState()
+        self.welcome_state.provider_chosen.connect(self._start_onboarding)
 
         self.center_stack = QStackedWidget()
         self.center_stack.addWidget(list_page)
         self.center_stack.addWidget(self.loading_state)
         self.center_stack.addWidget(self.empty_state)
         self.center_stack.addWidget(self.error_state)
+        self.center_stack.addWidget(self.welcome_state)
         column.addWidget(self.center_stack, stretch=1)
         return pane
 
@@ -901,6 +916,14 @@ class MainWindow(QMainWindow):
         account's sync progress, then a designed empty state, then the
         list itself - so the app stays usable while a first sync runs."""
         accounts = self.db.get_accounts()
+        if not accounts:
+            # Nothing is connected yet, so the window has exactly one job.
+            # Two empty states either side of a splitter is not onboarding.
+            self._set_onboarding(True)
+            self.center_stack.setCurrentIndex(PAGE_WELCOME)
+            return
+        self._set_onboarding(False)
+
         account = None
         if self.current_account_id is not None:
             current = next(
@@ -926,6 +949,37 @@ class MainWindow(QMainWindow):
             self.center_stack.setCurrentIndex(PAGE_EMPTY)
             return
         self.center_stack.setCurrentIndex(PAGE_LIST)
+
+    def _set_onboarding(self, active: bool) -> None:
+        """First run takes the whole content area.
+
+        The reading pane and the list's own controls have nothing to act
+        on before an account exists, and showing them anyway is what made
+        an empty window read as a broken one.
+        """
+        if getattr(self, "_onboarding", None) == active:
+            return
+        self._onboarding = active
+        self.preview.setVisible(not active and not self._stacked_mode
+                                or (not active and self._reading))
+        if not self._stacked_mode:
+            self.preview.setVisible(not active)
+        self.list_header.setVisible(not active)
+        self.load_more_btn.setVisible(False)
+        self.toolbar.compose_button.setEnabled(not active)
+        self._set_status(
+            "Connect an account to get started" if active
+            else self._status_label.text()
+        )
+
+    def _start_onboarding(self, provider: int) -> None:
+        """A provider was chosen on the welcome surface - open Add Account
+        already on that choice rather than asking the same question
+        again."""
+        self.open_add_account()
+        dialog = self._account_dialog
+        if dialog is not None:
+            dialog.select_provider(provider)
 
     def _show_empty_state(self, *, has_accounts: bool) -> None:
         search = self.toolbar.search_text()
@@ -1412,6 +1466,7 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._apply_sync_interval()
             self.toolbar.refresh_theme_icon()
+            self._apply_saved_appearance()
             if dialog.accounts_changed:
                 remaining = {a["id"] for a in self.db.get_accounts()}
                 for aid in self.sync.known_account_ids():

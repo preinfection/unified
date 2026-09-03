@@ -204,7 +204,8 @@ class _StatusLight(QWidget):
         self.setFixedSize(_DOT_SIZE, _DOT_SIZE)
         self._status = "idle"
         self._color = QColor(t.status_color("idle"))
-        self._fade = ValueAnimator(self, 1.0, motion.DURATION_FAST)
+        self._fade = ValueAnimator(self, 1.0, motion.DURATION_FAST,
+                                   spatial=False)
         self._from = QColor(self._color)
         self._pulse = ValueAnimator(self, 0.0, motion.SHIMMER_CYCLE // 2,
                                     motion.EASE_IN_OUT)

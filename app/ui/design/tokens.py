@@ -97,8 +97,8 @@ STATUS_BAR_HEIGHT = 26
 # Window widths at which the shell changes shape. Real Qt constraints, not
 # imported web breakpoints: each is the width below which the pane in
 # question can no longer show its content without clipping.
-BREAKPOINT_COLLAPSE_SIDEBAR = 1080  # sidebar -> icon rail
-BREAKPOINT_STACK_READER = 900       # reader takes over the list's space
+BREAKPOINT_COLLAPSE_SIDEBAR = 920  # sidebar -> icon rail
+BREAKPOINT_STACK_READER = 780      # reader takes over the list's space
 
 # Legacy structural names kept so existing call sites keep describing the
 # same things they always did.

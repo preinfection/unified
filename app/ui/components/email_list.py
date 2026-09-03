@@ -487,10 +487,11 @@ class EmailListView(QListView):
         self._hover_row = -1
         self._leaving_row = -1
         self._hover_in = ValueAnimator(self.viewport(), 0.0,
-                                       motion.DURATION_HOVER)
+                                       motion.DURATION_HOVER, spatial=False)
         self._hover_out = ValueAnimator(self.viewport(), 0.0,
                                         int(motion.DURATION_HOVER * 1.4),
-                                        motion.EASE_BOUNCE_STRONG)
+                                        motion.EASE_BOUNCE_STRONG,
+                                        spatial=False)
         # The selected surface travels between rows (transitions.dev
         # "tabs sliding"): one indicator, painted under every row.
         self._sel_y = ValueAnimator(self.viewport(), 0.0,
@@ -498,7 +499,7 @@ class EmailListView(QListView):
         self._sel_h = ValueAnimator(self.viewport(), 0.0,
                                     motion.TABS_DURATION, motion.EASE_SMOOTH_OUT)
         self._sel_presence = ValueAnimator(self.viewport(), 0.0,
-                                           motion.DURATION_FAST)
+                                           motion.DURATION_FAST, spatial=False)
         # The first placement lands; later ones travel.
         self._sel_placed = False
 
@@ -613,6 +614,7 @@ class EmailListView(QListView):
             return
         top = float(rect.y() + 1)
         height = float(rect.height() - 2)
+        first = not self._sel_placed
         if animate and self._sel_placed:
             self._sel_y.to(top)
             self._sel_h.to(height)
@@ -620,7 +622,10 @@ class EmailListView(QListView):
             self._sel_y.set_now(top)
             self._sel_h.set_now(height)
         self._sel_placed = True
-        self._sel_presence.to(1.0, duration=motion.DURATION_FAST)
+        if first or not animate:
+            self._sel_presence.set_now(1.0)
+        else:
+            self._sel_presence.to(1.0, duration=motion.DURATION_FAST)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         # The travelling selection is painted first, on the viewport, so
