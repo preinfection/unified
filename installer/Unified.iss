@@ -12,7 +12,7 @@
 ; parallel install instead of replacing the old one in place.
 
 #define MyAppName "Unified"
-#define MyAppVersion "1.2.1"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "preinfection"
 #define MyAppExeName "Unified.exe"
 #define MyDistDir "..\dist\Unified"

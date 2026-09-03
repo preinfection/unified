@@ -1,5 +1,138 @@
 # Unified
 
+## v1.3.0
+
+A full UI/UX redesign. The product does the same things it did in v1.2.1
+and does them behind a new design system, a rebuilt shell, and a set of
+workflows the old interface simply did not have.
+
+### A real design system
+
+Every color, size, radius, duration and type style now comes from one
+place (`app/ui/design/`), and widgets ask for them by *role* rather than
+by value.
+
+- **Semantic color roles** with two palettes behind them. Elevation runs
+  sidebar -> message list -> reading pane in both themes, so the pane
+  structure reads even with every border removed.
+- **Accent is split in two**: a hue family for indicators, focus and
+  selection tints, and a solid family for filled controls that is tuned
+  for 4.5:1 against its own label. Conflating the two is how a blue
+  button ends up with an unreadable white label.
+- **One stylesheet**, rendered from tokens, that raises on an unknown
+  placeholder instead of silently dropping the rule it appears in.
+- **A live token facade**: a hand-painted delegate reading
+  `t.TEXT_PRIMARY` inside `paint()` is simply correct after a theme
+  change, with no invalidation protocol.
+- **Measured contrast.** Every foreground/background pairing the app
+  actually renders is listed with a minimum ratio and asserted by test,
+  in both themes.
+
+See `DESIGN.md` for the whole system.
+
+### Light theme
+
+A real light palette, not the dark one inverted - light UI takes more of
+its structure from borders and less from fills, and its surfaces sit
+closer together. The app follows the Windows light/dark setting by
+default, and switches live: the palette, the QPalette (which covers
+everything QSS cannot reach) and the stylesheet all move together.
+
+### A rebuilt shell
+
+- A **command bar** replaces the old QToolBar: app identity, Compose as
+  the one filled button in the window, sync, search, appearance, console
+  and an overflow menu.
+- The **sidebar** now separates places (mailboxes) from filters
+  (accounts). Previously a folder and an account both looked like a
+  selected pill, which made "Inbox, filtered to this account" and "this
+  account's inbox" visually identical.
+- The **message list has its own header**, stating where you are, what it
+  is filtered to and how many messages there are. "Showing 100 of 8,412"
+  is now said out loud instead of inferred.
+- The **reading pane** lost its card: the message body sits directly on
+  the pane, with the subject as a real heading, expandable recipients, an
+  absolute timestamp, and actions grouped by consequence - reply and
+  forward on the left, destructive separated on the right.
+
+### New in the interface
+
+- **Reply, Reply all and Forward**, quoting the original the way a mail
+  client should, with the cursor above the quote.
+- **Cc and Bcc**, hidden until asked for. (Bcc is an envelope-only
+  recipient over SMTP, so a blind copy is never disclosed in the headers.)
+- **An unread filter** and **Mark all as read**.
+- **List density** - Compact, Cozy or Relaxed.
+- **Keyboard shortcuts** for every frequent action, including `J`/`K`
+  navigation, `R`/`Shift+R`/`F`, `S`, `U`, `Del`, `Ctrl+1..4` and `/` for
+  search.
+- **A responsive shell**: below 1080px the sidebar becomes an icon rail;
+  below 900px the reading pane takes over the list's space with a Back
+  button.
+- **Designed empty, loading and error states**, each saying what happened
+  and offering the next action, with technical detail kept available
+  rather than led with.
+- **Dialogs in the product's own language** - `QMessageBox` is gone.
+
+### Fixed
+
+- **Read and unread rows now share one left edge.** The unread dot was
+  inline, so every unread sender name sat 10px right of every read one
+  and a mixed list went ragged down the middle. It has its own gutter.
+- **Avatar colors are stable across launches.** They were derived from
+  `hash()`, which is salted per process, so the same correspondent got a
+  different color every time the app started.
+- **Subject and preview no longer share one elision.** They were joined
+  into a single string, so a long subject silently ate the preview.
+- **Custom widget surfaces actually paint.** Qt draws no stylesheet
+  background *or border* for a user-defined QWidget subclass without
+  `WA_StyledBackground`, which is why several surfaces had no visible
+  boundary.
+- **Disabled danger and link buttons look disabled**, and an icon-only
+  primary action keeps its fill.
+- **The status strip shows one string.** `QStatusBar.showMessage()`
+  paints over permanent widgets rather than replacing them, so two were
+  drawn on top of each other.
+- **Empty and error copy no longer overlaps** the text below it.
+- **Toasts moved to the bottom-right**, clear of the reading pane's
+  action row.
+
+### Accessibility
+
+- Keyboard focus rings that appear for Tab and shortcut focus but not for
+  a mouse click, and that do not move the layout.
+- Every icon-only control carries a tooltip and an accessible name,
+  enforced by test.
+- Reading order tab order, accessible names on the panes, and an
+  accessible description per message row.
+- The OS reduced-motion preference is read once and honored everywhere.
+- Nothing is communicated by color alone.
+
+### Performance
+
+- The message-row delegate no longer builds five QFonts and three
+  QFontMetrics per row per frame; they are cached and rebuilt only on a
+  theme or density change.
+- Elevation prefers surface contrast over `QGraphicsDropShadowEffect`,
+  which is now used only on surfaces that genuinely float and never on a
+  scrolling view.
+
+### Backend
+
+Deliberately minimal, and only where the interface required it: Cc/Bcc on
+both send paths, `unread_only` filtering and `mark_all_read` in the
+database layer, and two appearance settings. Sync, authentication,
+encryption, the attachment guard and the HTML renderer are unchanged.
+
+### Tests
+
+250 pass, up from 227. `tests/test_design_system.py` was rewritten to
+assert the system's *contract* - ordered and distinguishable elevation,
+ordered and restrained radii, WCAG AA on every rendered pairing in both
+themes, no unresolved tokens, no hardcoded colors outside the design
+package, real rendered pixels for the components - rather than equality
+with the external visual reference this release replaces.
+
 ## v1.2.1
 
 Fixes a serious HTML email rendering bug reported against v1.2.0's
