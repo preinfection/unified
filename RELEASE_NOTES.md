@@ -1,6 +1,13 @@
 # Unified
 
-## v1.3.0
+## v1.4.0
+
+> **Note on lineage.** This line was developed from v1.2.1 in parallel
+> with the v1.3.0 redesign that reached `main` on 2026-09-03, and the two
+> overlap heavily in intent. It is not a continuation of v1.3.0 and has
+> not been merged with it. Numbered 1.4.0 only so its installer cannot be
+> confused with, or silently upgrade over, the v1.3.0 build - the two
+> share an installer AppId.
 
 A product-level redesign of the interface, followed by a production
 polish pass. No change to how mail is fetched, stored, encrypted or

@@ -36,7 +36,7 @@ Built with Python, PySide6, and SQLite, Unified focuses on a modern desktop expe
 1. Download the latest release:
 
 ```
-Unified-Setup-v1.3.0.exe
+Unified-Setup-v1.4.0.exe
 ```
 
 2. Run the installer.
