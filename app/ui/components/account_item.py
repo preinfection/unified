@@ -68,7 +68,42 @@ class AccountItem(QWidget):
         text_col.addWidget(self._status)
 
         outer.addLayout(text_col, stretch=1)
+        self._outer = outer
+        self._email = account["email"]
+        self._collapsed = False
+        self._unread = 0
         self._apply_style()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Avatar only, when the drawer is a rail.
+
+        The email, the badge and the status line are HIDDEN rather than
+        removed, so expanding again does not have to rebuild the row. The
+        avatar stays because it is the one part of an account row still
+        legible at 56px, and because it is already how accounts are told
+        apart in the message list - the same cue in both places.
+        """
+        if collapsed == self._collapsed:
+            return
+        self._collapsed = collapsed
+        self._email_label.setVisible(not collapsed)
+        # THE BADGE IS NOT A PLAIN setVisible, for the same reason the
+        # status line is not. Forcing it visible on expand showed an EMPTY
+        # grey pill beside every account with nothing unread - the widget
+        # exists whatever the count is, and only the count decides whether
+        # it should be seen. Two owners of one visibility flag again.
+        self._refresh_badge()
+        # Likewise: the status line decides its own visibility from whether
+        # it has text, and sync ticks would otherwise show it again moments
+        # after collapsing. See StatusIndicator.set_suppressed.
+        self._status.set_suppressed(collapsed)
+        pad = 0 if collapsed else t.SPACE_SM
+        self._outer.setContentsMargins(
+            pad, t.SPACE_SM - 1, pad, t.SPACE_SM - 1
+        )
+        # The row has lost its label, so it has to say what it is some
+        # other way: a rail of anonymous avatars is a guessing game.
+        self.setToolTip(self._email if collapsed else "")
 
     def mousePressEvent(self, event) -> None:
         self.clicked.emit(self.account_id)
@@ -81,8 +116,20 @@ class AccountItem(QWidget):
         self._apply_style()
 
     def set_unread(self, count: int) -> None:
-        self._badge.setText(str(count) if count else "")
-        self._badge.setVisible(bool(count))
+        self._unread = max(0, int(count))
+        self._refresh_badge()
+
+    def _refresh_badge(self) -> None:
+        """One place decides whether the count is on screen.
+
+        Both the unread count and the collapsed state have an opinion here,
+        so neither is allowed to call setVisible directly - see the note in
+        set_collapsed.
+        """
+        count = getattr(self, "_unread", 0)
+        # 99+ rather than a four-digit pill that resizes the row it is in.
+        self._badge.setText(str(count) if count < 100 else "99+")
+        self._badge.setVisible(bool(count) and not self._collapsed)
 
     def set_status(self, status_key: str, text: str) -> None:
         self._status.set_status(status_key, text)

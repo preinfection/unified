@@ -1,30 +1,49 @@
-"""Sidebar navigation item with the reference's signature selected-state
-indicator: a 3px accent bar on the row's left edge that grows from zero
-height when the item becomes active and shrinks back when it doesn't.
+"""Sidebar navigation item.
 
-QSS can express the fill and text color of a checked button but not an
-animated sub-element, so the bar is painted here over the styled button.
-The reference sizes it at ~53% of the row height, centered vertically,
-with a 2px corner radius, and tweens it over T_NORMAL - all reproduced
-below against Unified's equivalent tokens.
+WHAT THIS USED TO DO, AND WHY IT STOPPED
+
+It painted a 3px accent bar down the row's left edge, grown from zero
+height on selection, on top of a QSS rule that ALSO gave the checked state
+an accent-tinted fill, an accent text color and a heavier weight. Four
+simultaneous cues for one boolean.
+
+Two problems, and the second is the real one:
+
+  * A colored bar on the left edge of a row is decoration standing in for
+    meaning. It is the cheapest way to make a list item look designed, it
+    is everywhere, and it is never the clearest available answer.
+  * Stacking four cues does not make a state clearer, it makes the sidebar
+    louder. A user cannot tell which of the four is the signal, so all four
+    become noise, and the accent - the app's single brightest value - gets
+    spent on "which folder am I in", which the user already knows.
+
+So the row is now a SURFACE. Selected means the item sits on the raised
+warm step (BG_SELECTED) with primary text; unselected is transparent with
+secondary text. One cue, matching the message-list rows exactly, so a
+glance at any part of the app reads "selected" the same way.
+
+The animation survives, and it is better than what it replaced: instead of
+growing a bar, it fades the surface in over T_NORMAL. Motion is attached to
+a state change rather than to an ornament, and the fill is painted here
+rather than in QSS because Qt Style Sheets cannot animate a background.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import (
     Property,
-    QEasingCurve,
     QPropertyAnimation,
     QRectF,
     Qt,
 )
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QPushButton
 
-from app.ui import theme as t
+from app.ui import motion, theme as t
 
-_BAR_WIDTH = 3
-_BAR_HEIGHT_RATIO = 0.53   # reference: indH = clamp(btnH * 0.53, 8, btnH)
+# How much of the selected surface a mere hover is worth. Hover has to be
+# clearly less than selected or the two states argue with each other.
+_HOVER_STRENGTH = 0.55
 
 
 class NavPill(QPushButton):
@@ -34,18 +53,26 @@ class NavPill(QPushButton):
         self.setCheckable(True)
         self.setFlat(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
         self._indicator = 1.0 if self.isChecked() else 0.0
+        self._hovered = False
         self._anim = QPropertyAnimation(self, b"indicator", self)
         self._anim.setDuration(t.DURATION_BASE)
-        # The reference eases every transition with Quint/Out.
-        self._anim.setEasingCurve(QEasingCurve.Type.OutQuint)
+        # Via motion.curve() rather than naming OutQuint here: the same
+        # value, but stated in one place, so changing the app's curve
+        # does not leave one component behind.
+        self._anim.setEasingCurve(motion.curve())
         self.toggled.connect(self._animate_to)
 
     def _animate_to(self, checked: bool) -> None:
+        end = 1.0 if checked else 0.0
         self._anim.stop()
+        if not motion.motion_enabled():
+            self._set_indicator(end)
+            return
         self._anim.setStartValue(self._indicator)
-        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.setEndValue(end)
         self._anim.start()
 
     def _get_indicator(self) -> float:
@@ -57,18 +84,39 @@ class NavPill(QPushButton):
 
     indicator = Property(float, _get_indicator, _set_indicator)
 
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
     def paintEvent(self, event) -> None:  # noqa: N802
+        """The surface is painted BEFORE the button's own label.
+
+        QPushButton.paintEvent draws the text; anything painted after it
+        would cover the label. The old implementation could get away with
+        painting afterwards because a 3px bar at the very edge never
+        overlapped the text - a full-bleed fill does.
+        """
+        strength = self._indicator
+        if self._hovered and not self.isChecked():
+            strength = max(strength, _HOVER_STRENGTH)
+
+        if strength > 0.001:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            fill = QColor(t.BG_SELECTED)
+            fill.setAlphaF(min(1.0, strength))
+            painter.setBrush(fill)
+            painter.drawRoundedRect(
+                QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                float(t.RADIUS_MD), float(t.RADIUS_MD),
+            )
+            painter.end()
+
         super().paintEvent(event)
-        if self._indicator <= 0.001:
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(t.qcolor(t.ACCENT))
-        full = self.height() * _BAR_HEIGHT_RATIO
-        height = full * self._indicator
-        painter.drawRoundedRect(
-            QRectF(0.0, (self.height() - height) / 2.0, float(_BAR_WIDTH), height),
-            2.0, 2.0,
-        )
-        painter.end()

@@ -20,10 +20,10 @@ import logging
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QPushButton,
     QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from app import config
 from app.database import Database
+from app.email import reply as reply_builder
 from app.services.account_manager import AccountManager
 from app.services.notifier import Notifier
 from app.services.sync_service import (
@@ -60,13 +61,16 @@ from app.ui.components.loading_state import LoadingState
 from app.ui.components.preview_pane import PreviewPane
 from app.ui.components.sidebar import SidebarWidget
 from app.ui.components.toast import ToastHost
+from app.ui.components.primitives import Button, Variant
 from app.ui.components.toolbar import TopToolBar
 from app.ui.compose_dialog import ComposeDialog
 from app.ui.console import ConsoleWidget
 from app.ui.icons import make_app_icon
 from app.ui.native_theme import apply_dark_titlebar
 from app.ui.settings_dialog import SettingsDialog
-from app.ui import theme as t
+from app.ui.shortcuts import ShortcutManager
+from app.ui.shortcuts_dialog import ShortcutsDialog
+from app.ui import motion, theme as t
 from app.ui.svg_icon import simple_icon
 
 log = logging.getLogger(__name__)
@@ -85,6 +89,13 @@ PHASE_TEXT = {
 # cache is still searched live, but providers are not asked (a server-side
 # search per keystroke would be abusive and slow).
 _REMOTE_SEARCH_MIN_CHARS = 3
+
+# Below this window width the sidebar becomes a rail on its own. Chosen
+# from what the three panes actually need: a readable message list wants
+# roughly 380px and the reading pane about the same, so once the window
+# is under ~1080 the drawer's fixed 248 is being taken from one of them
+# rather than from slack.
+_SIDEBAR_COLLAPSE_WIDTH = 1080
 
 
 def _decode_attachments(msg: dict) -> list[dict]:
@@ -147,16 +158,29 @@ class MainWindow(QMainWindow):
         # not re-hit the network).
         self._search_workers: list[RemoteSearchWorker] = []
         self._remote_searched: set[str] = set()
+        # True only while the sidebar is collapsed because the WINDOW is
+        # narrow, never because the user asked - see
+        # _apply_responsive_layout and _on_sidebar_collapsed.
+        self._auto_collapsed = False
 
         self.setWindowTitle("Unified")
         self.setWindowIcon(make_app_icon())
         self.resize(1280, 800)
-        apply_dark_titlebar(self)
+
+        # APPEARANCE BEFORE ANY WIDGET IS BUILT. Half of this app paints
+        # itself (row delegate, avatars, nav fill) by reading theme
+        # attributes at paint time, and the other half is styled by a QSS
+        # string Qt has already parsed. Binding the mode after construction
+        # would leave the first group correct and the second showing the
+        # previous palette until something forced a re-polish.
+        self._apply_appearance_settings()
+        apply_dark_titlebar(self, dark=t.is_dark())
 
         self._build_toolbar()
         self._build_body()
         self._build_tray()
         self.toasts = ToastHost(self)
+        self._install_shortcuts()
         self.statusBar().showMessage("Ready")
 
         # Coalesced reload: many sync events -> at most ~1 reload per 700 ms.
@@ -231,6 +255,218 @@ class MainWindow(QMainWindow):
                     "re-add this account", account["id"],
                 )
 
+    # --------------------------------------------------------------- appearance
+
+    def _apply_appearance_settings(self) -> None:
+        """Bind the saved theme and motion preference before anything is built.
+
+        Called once from __init__ and again whenever Settings is saved.
+        """
+        mode = str(self.settings.get("theme_mode") or "dark")
+        if mode not in t.MODES:
+            mode = "dark"
+        t.apply_mode(mode)
+        motion.set_motion_enabled(not bool(self.settings.get("reduced_motion")))
+
+    def set_theme_mode(self, mode: str) -> None:
+        """Switch palettes live, in the one order that actually works.
+
+        THERE ARE TWO HALVES AND THEY UPDATE DIFFERENTLY. The custom
+        painters (row delegate, avatars, nav fill, toasts) read
+        `t.BG_SELECTED` and friends inside paintEvent, so rebinding the
+        module globals and forcing a repaint is all they need. The
+        stylesheet is not automatic: QSS is a string Qt parsed once, so it
+        has to be rebuilt from the new tokens and re-applied. Rebind first,
+        re-apply second, repaint last - any other order paints one half of
+        the window in the old palette.
+
+        The light palette has existed and been contrast-measured since the
+        warm-archive pass and nothing could reach it: apply_mode() was
+        called exactly once, at import, with "dark" hardcoded.
+        """
+        if mode not in t.MODES or mode == t.MODE:
+            return
+        from PySide6.QtWidgets import QApplication
+        from app.ui.style import get_stylesheet, invalidate_style_cache
+
+        t.apply_mode(mode)
+        self.settings.set("theme_mode", mode)
+
+        invalidate_style_cache()
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(get_stylesheet())
+
+        apply_dark_titlebar(self, dark=t.is_dark())
+
+        # Text colour follows the stylesheet now (theme.role), but an ICON
+        # is a pixmap tinted at build time and cannot. Anything holding one
+        # declares a retheme() and is found by the walker, so this does not
+        # depend on a hand-maintained list of which widgets those are.
+        t.retheme_tree(self)
+        for widget in (self, self.email_list.viewport(), self.console):
+            widget.update()
+        self.statusBar().showMessage(
+            "Light theme" if mode == "light" else "Dark theme"
+        )
+
+    def toggle_theme(self) -> None:
+        self.set_theme_mode("light" if t.is_dark() else "dark")
+
+    def set_compact_rows(self, compact: bool) -> None:
+        """Row density, which was reachable from nothing at all.
+
+        email_list.set_compact() and the two ROW_HEIGHT tokens have been in
+        place since the row was rebuilt as three lines; no setting, no
+        shortcut and no menu item ever called it.
+        """
+        self.settings.set("compact_rows", bool(compact))
+        self.email_list.set_compact(bool(compact))
+        self.statusBar().showMessage(
+            "Compact rows" if compact else "Comfortable rows"
+        )
+
+    def toggle_density(self) -> None:
+        self.set_compact_rows(not bool(self.settings.get("compact_rows")))
+
+    def toggle_sidebar(self) -> None:
+        # An explicit toggle ends any automatic collapse: the user has now
+        # said what they want and the window must stop overruling them on
+        # the next resize.
+        self._auto_collapsed = False
+        self.sidebar.toggle_collapsed()
+
+    def _on_sidebar_collapsed(self, collapsed: bool) -> None:
+        """Remember the drawer state, so the app opens the way it was left.
+
+        ONLY WHEN THE USER CHOSE IT. A collapse the window performed
+        because it got narrow is a response to the geometry, not a
+        preference - persisting it would mean dragging the window small
+        once left the drawer collapsed forever afterwards, on every
+        monitor.
+        """
+        if self._auto_collapsed:
+            return
+        self.settings.set("sidebar_collapsed", bool(collapsed))
+
+    # --------------------------------------------------------------- responsive
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self) -> None:
+        """Give the drawer back to the content when the window is small.
+
+        This is a three-pane application, so the sidebar's fixed 248px
+        comes straight out of the message list and the reading pane. At
+        1000px wide that is a quarter of the window spent on four folder
+        names the user already knows, while the pane they are reading is
+        squeezed to 340. Below the threshold the drawer becomes a rail,
+        which gives 192px back to the two surfaces the product is for.
+
+        It reverses on the way back up, and only for collapses this made -
+        see _on_sidebar_collapsed. A user who collapsed the drawer
+        themselves keeps it collapsed at any width.
+        """
+        if self.sidebar.is_collapsed() and not self._auto_collapsed:
+            return  # the user's own choice; leave it alone
+        narrow = self.width() < _SIDEBAR_COLLAPSE_WIDTH
+        if narrow and not self.sidebar.is_collapsed():
+            self._auto_collapsed = True
+            self.sidebar.set_collapsed(True)
+        elif not narrow and self._auto_collapsed:
+            self._auto_collapsed = False
+            self.sidebar.set_collapsed(False)
+
+    # --------------------------------------------------------------- shortcuts
+
+    def _install_shortcuts(self) -> None:
+        """Give the app a keyboard.
+
+        app/ui/shortcuts.py has been complete, documented and imported by
+        nothing since it was written: every action in this mail client
+        required the mouse. The handler table is the whole wiring - the
+        bindings, their guards and the help sheet all come from that
+        module, so a binding cannot exist without appearing in the sheet.
+        """
+        self._shortcuts = ShortcutManager(self, {
+            "next_message": lambda: self._step_message(1),
+            "prev_message": lambda: self._step_message(-1),
+            "open_message": self._open_focused_message,
+            "mark_unread": self._mark_current_unread,
+            "toggle_star": self._toggle_star,
+            "delete_message": self._delete_current,
+            "focus_search": self._focus_search,
+            "escape": self._on_escape,
+            "compose": self.open_compose,
+            "refresh": self.start_sync,
+            "toggle_theme": self.toggle_theme,
+            "toggle_density": self.toggle_density,
+            "toggle_sidebar": self.toggle_sidebar,
+            "settings": self.open_settings,
+            "show_shortcuts": self.show_shortcuts,
+        })
+        self._shortcuts.install()
+
+    def _step_message(self, delta: int) -> None:
+        """Move the selection by one real message.
+
+        Skips the synthetic date-group headers, which are rows in the same
+        flat model but are not selectable - stepping onto one would look
+        like the keyboard had stopped working.
+        """
+        rows = self.email_list._model._rows
+        if not rows:
+            return
+        selectable = [i for i, row in enumerate(rows) if not row.get("is_header")]
+        if not selectable:
+            return
+        current = self.email_list.currentIndex().row()
+        if current in selectable:
+            position = selectable.index(current)
+            position = max(0, min(len(selectable) - 1, position + delta))
+        else:
+            position = 0 if delta > 0 else len(selectable) - 1
+        index = self.email_list._model.index(selectable[position], 0)
+        self.email_list.setCurrentIndex(index)
+        self.email_list.scrollTo(index)
+        self.email_list.setFocus()
+
+    def _open_focused_message(self) -> None:
+        email_id = self.email_list.selected_email_id()
+        if email_id is not None:
+            self._on_email_selected(email_id)
+            self.preview.setFocus()
+
+    def _focus_search(self) -> None:
+        self.toolbar.search_edit.setFocus()
+        self.toolbar.search_edit.selectAll()
+
+    def _on_escape(self) -> None:
+        """Escape means "back out one step", and which step depends on where
+        you are: clear a search you are in, otherwise return to the list."""
+        if self.toolbar.search_edit.hasFocus() and self.toolbar.search_text():
+            self.toolbar.search_edit.clear()
+            return
+        self.email_list.setFocus()
+
+    def _mark_current_unread(self) -> None:
+        email_id = self.email_list.selected_email_id() or self.current_email_id
+        if email_id is None:
+            return
+        msg = self.db.get_email(email_id)
+        if not msg or not msg["is_read"]:
+            return
+        self.db.set_read(email_id, False)
+        self._remote_action(msg, "read", False)
+        self.reload_email_list()
+        self.reload_sidebar()
+        self.statusBar().showMessage("Marked unread")
+
+    def show_shortcuts(self) -> None:
+        ShortcutsDialog(self).exec()
+
     # ------------------------------------------------------------------ toolbar
 
     def _build_toolbar(self) -> None:
@@ -251,23 +487,51 @@ class MainWindow(QMainWindow):
         self.sidebar.account_selected.connect(self._on_account_selected)
         self.sidebar.add_account_requested.connect(self.open_add_account)
         self.sidebar.settings_requested.connect(self.open_settings)
+        self.sidebar.collapsed_changed.connect(self._on_sidebar_collapsed)
+        # Restored without animating: the window has not been shown yet, so
+        # there is nothing for a 280ms width tween to narrate.
+        if bool(self.settings.get("sidebar_collapsed")):
+            self.sidebar.set_collapsed(True, animate=False)
         splitter.addWidget(self.sidebar)
 
         self.email_list = EmailListView()
         self.email_list.email_selected.connect(self._on_email_selected)
         self.email_list.context_menu_requested.connect(self._on_email_context_menu)
+        # THE HOVER QUICK ACTIONS WERE PAINTED, HIT-TESTED AND UNCONNECTED.
+        # EmailListView has emitted these two since the row was rebuilt;
+        # nothing listened, so the star and trash glyphs that appear on a
+        # hovered row did precisely nothing when clicked. A control that
+        # draws itself, lights up under the pointer and then ignores the
+        # click is worse than one that was never drawn.
+        self.email_list.star_toggled.connect(self._star_row)
+        self.email_list.delete_requested.connect(self._delete_row)
+        self.email_list.set_compact(bool(self.settings.get("compact_rows")))
 
         # List page: the list plus a Load More button that appears whenever
         # the display limit hides messages (so nothing ever looks missing).
         list_page = QWidget()
         lp = QVBoxLayout(list_page)
         lp.setContentsMargins(0, 0, 0, 0)
-        lp.setSpacing(4)
-        self.load_more_btn = QPushButton("Load more")
+        lp.setSpacing(0)
+        # SECONDARY, AND CENTRED UNDER THE LIST IT EXTENDS. It was a bare
+        # QPushButton stretched across the full width of the pane, which
+        # made paging - the least important action on the screen - the
+        # widest control in the window. It is also the shared vocabulary
+        # now rather than whatever a default QPushButton happens to look
+        # like.
+        self.load_more_btn = Button("Load more", Variant.SECONDARY)
         self.load_more_btn.setVisible(False)
         self.load_more_btn.clicked.connect(self._load_more)
+        load_more_row = QWidget()
+        lm = QHBoxLayout(load_more_row)
+        lm.setContentsMargins(0, t.SPACE_SM, 0, t.SPACE_SM)
+        lm.addStretch(1)
+        lm.addWidget(self.load_more_btn)
+        lm.addStretch(1)
+        self._load_more_row = load_more_row
+        load_more_row.setVisible(False)
         lp.addWidget(self.email_list, stretch=1)
-        lp.addWidget(self.load_more_btn)
+        lp.addWidget(load_more_row)
 
         self.loading_state = LoadingState()
         self.empty_state = EmptyState()
@@ -281,6 +545,10 @@ class MainWindow(QMainWindow):
         self.preview = PreviewPane()
         self.preview.star_clicked.connect(self._toggle_star)
         self.preview.delete_clicked.connect(self._delete_current)
+        self.preview.mark_unread_clicked.connect(self._mark_current_unread)
+        self.preview.reply_clicked.connect(lambda: self._compose_from("reply"))
+        self.preview.reply_all_clicked.connect(lambda: self._compose_from("reply_all"))
+        self.preview.forward_clicked.connect(lambda: self._compose_from("forward"))
         splitter.addWidget(self.preview)
 
         splitter.setStretchFactor(0, 0)
@@ -595,15 +863,22 @@ class MainWindow(QMainWindow):
                 f"Showing newest {shown:,} of {total:,} emails"
                 " - use Load more or search to reach older mail"
             )
-            self.load_more_btn.setText(
-                f"Load more  (showing {shown:,} of {total:,} emails)"
+            # The count belongs in the status bar, which is already saying
+            # it; a button's label is what it DOES. "Load more (showing
+            # 100 of 2,431 emails)" is a sentence pretending to be a
+            # control, and it changed width on every reload.
+            self.load_more_btn.setText("Load more")
+            self.load_more_btn.setToolTip(
+                f"Showing the newest {shown:,} of {total:,} cached messages"
             )
             self.load_more_btn.setVisible(True)
+            self._load_more_row.setVisible(True)
         else:
             self.statusBar().showMessage(
                 f"{total:,} message{'s' if total != 1 else ''}"
             )
             self.load_more_btn.setVisible(False)
+            self._load_more_row.setVisible(False)
         self._refresh_center_page(shown)
 
     def _refresh_center_page(self, email_count: int) -> None:
@@ -613,6 +888,9 @@ class MainWindow(QMainWindow):
         list itself, so the app stays usable during sync.
         """
         accounts = self.db.get_accounts()
+        # Compose is an offer, and it is only true once there is somewhere to
+        # send from. See TopToolBar.set_compose_enabled.
+        self.toolbar.set_compose_enabled(bool(accounts))
         account = None
         if self.current_account_id is not None:
             current = next(
@@ -647,34 +925,41 @@ class MainWindow(QMainWindow):
         search = self.toolbar.search_text()
         if not has_accounts:
             self.empty_state.set_state(
-                icon="add_circle", title="No accounts yet",
-                detail="Add a Gmail or IMAP account to start receiving mail.",
+                icon="add_circle", title="Nothing here yet",
+                detail="Connect a Gmail or IMAP account and Unified will keep "
+                       "an encrypted copy of it on this machine.",
                 action_text="Add account", on_action=self.open_add_account,
             )
-        elif search:
+            # ONE OFFER PER SCREEN. The reading pane's own placeholder would
+            # otherwise sit beside this one telling the user to pick a
+            # message from a list that is empty.
+            self.preview.show_nothing()
+            return
+        self.preview.reset()
+        if search:
             self.empty_state.set_state(
                 icon="search", title="No results",
-                detail=f'No messages match "{search}".',
+                detail=f'Nothing in the local cache matches "{search}".',
             )
         elif self.current_view == "starred":
             self.empty_state.set_state(
                 icon="starred_nav", title="No starred messages",
-                detail="Star an email to keep it handy here.",
+                detail="Starred messages collect here.",
             )
         elif self.current_view == "sent":
             self.empty_state.set_state(
                 icon="sent", title="No sent messages yet",
-                detail="Messages you send will appear here.",
+                detail="Messages you send collect here.",
             )
         elif self.current_view == "trash":
             self.empty_state.set_state(
                 icon="trash", title="Trash is empty",
-                detail="Deleted messages will appear here.",
+                detail="Deleted messages collect here.",
             )
         else:
             self.empty_state.set_state(
                 icon="inbox", title="Inbox is empty",
-                detail="New mail will appear here automatically.",
+                detail="New mail arrives here as it syncs.",
             )
 
     def _update_loading_state(self, account: dict) -> None:
@@ -812,7 +1097,14 @@ class MainWindow(QMainWindow):
         self.toasts.show("Server update failed", err, kind="error")
 
     def _toggle_star(self) -> None:
+        """Star the message being READ (reading pane button, `s` shortcut)."""
         if self.current_email_id is None:
+            # No message open, but the list may still have one focused -
+            # `s` should act on what the user is looking at.
+            focused = self.email_list.selected_email_id()
+            if focused is None:
+                return
+            self._star_row(focused)
             return
         msg = self.db.get_email(self.current_email_id)
         if not msg:
@@ -822,6 +1114,45 @@ class MainWindow(QMainWindow):
         self._remote_action(msg, "star", new_state)
         self.preview.set_starred(new_state)
         self._schedule_reload()
+
+    def _star_row(self, email_id: int) -> None:
+        """Star a row from the LIST, without selecting it.
+
+        Deliberately distinct from _toggle_star: starring the fourth
+        message in the list must not throw away the message currently open
+        in the reading pane. The list's own mousePressEvent already
+        declines to change the selection for a quick-action click; this is
+        the other half of that contract.
+        """
+        msg = self.db.get_email(email_id)
+        if not msg:
+            return
+        new_state = not msg["is_starred"]
+        self.db.set_starred(email_id, new_state)
+        self._remote_action(msg, "star", new_state)
+        if email_id == self.current_email_id:
+            self.preview.set_starred(new_state)
+        self.reload_email_list()
+        self.statusBar().showMessage("Starred" if new_state else "Unstarred")
+
+    def _delete_row(self, email_id: int) -> None:
+        """Delete a row from the list, selection untouched unless it WAS
+        the open message - in which case the reading pane has to let go of
+        a message that no longer exists."""
+        msg = self.db.get_email(email_id)
+        if not msg:
+            return
+        if msg["folder"] == "trash":
+            self.statusBar().showMessage("Already in Trash")
+            return
+        self.db.move_to_trash(email_id)
+        self._remote_action(msg, "trash")
+        if email_id == self.current_email_id:
+            self.current_email_id = None
+            self.preview.reset()
+        self.reload_email_list()
+        self.reload_sidebar()
+        self.statusBar().showMessage("Moved to Trash")
 
     def _delete_current(self) -> None:
         if self.current_email_id is None:
@@ -942,13 +1273,46 @@ class MainWindow(QMainWindow):
     def open_compose(self) -> None:
         accounts = self.db.get_accounts()
         if not accounts:
-            QMessageBox.information(
-                self, "No accounts", "Add an email account first."
-            )
+            self.statusBar().showMessage("Add an account before writing a message")
             return
         dialog = ComposeDialog(accounts, self)
-        dialog.sent.connect(lambda: self.statusBar().showMessage("Message sent"))
+        dialog.sent.connect(self._on_message_sent)
         dialog.exec()
+
+    def _compose_from(self, mode: str) -> None:
+        """Open a reply, reply-all or forward for the message being read.
+
+        The account the message ARRIVED AT is what it is sent from, not
+        whichever account happens to be first in the list: replying to
+        work mail from a personal address is the kind of mistake an
+        interface should make impossible rather than merely unlikely.
+        """
+        if self.current_email_id is None:
+            return
+        msg = self.db.get_email(self.current_email_id)
+        if not msg:
+            self.statusBar().showMessage("That message is no longer available")
+            return
+        accounts = self.db.get_accounts()
+        if not accounts:
+            return
+
+        account = next(
+            (a for a in accounts if a["id"] == msg["account_id"]), accounts[0]
+        )
+        fields = reply_builder.prepare(msg, mode, account["email"])
+        dialog = ComposeDialog(
+            accounts, self, mode=mode,
+            to=fields["to"], cc=fields["cc"],
+            subject=fields["subject"], body=fields["body"],
+            from_account=account,
+        )
+        dialog.sent.connect(self._on_message_sent)
+        dialog.exec()
+
+    def _on_message_sent(self) -> None:
+        self.statusBar().showMessage("Message sent")
+        self.toasts.show("Message sent", "", kind="success")
 
     def open_add_account(self) -> None:
         # Non-modal so a running Google sign-in or sync never blocks this.
@@ -982,6 +1346,13 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self.settings, self.manager, self)
         if dialog.exec():
             self._apply_sync_interval()
+            # Appearance can have moved under us: the dialog writes
+            # theme_mode / compact_rows / reduced_motion straight to
+            # Settings, so the window applies whatever is now stored rather
+            # than assuming nothing visual changed.
+            motion.set_motion_enabled(not bool(self.settings.get("reduced_motion")))
+            self.set_theme_mode(str(self.settings.get("theme_mode") or "dark"))
+            self.email_list.set_compact(bool(self.settings.get("compact_rows")))
             if dialog.accounts_changed:
                 remaining = {a["id"] for a in self.db.get_accounts()}
                 for aid in self.sync.known_account_ids():

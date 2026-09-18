@@ -1,5 +1,135 @@
 # Unified
 
+## v1.3.0
+
+A product-level redesign of the interface, followed by a production
+polish pass. No change to how mail is fetched, stored, encrypted or
+authenticated: every call into the database, sync, transport and security
+layers behaves as it did in v1.2.1, apart from the two additions noted
+under *Backend* below, both of which exist to support features in this
+release.
+
+### The keyboard works
+
+`app/ui/shortcuts.py` was complete, documented, and imported by nothing.
+Every action in the client required the mouse. The bindings are the ones
+Gmail, Thunderbird and Mailspring already share, so nothing has to be
+learned:
+
+    j / k or arrows   move through the list      /  or Ctrl+F   search
+    Enter             open the focused message   n  or Ctrl+N   compose
+    s                 star or unstar             r  or F5       sync now
+    u                 mark unread                Ctrl+B         sidebar
+    # or Delete       delete                     Ctrl+,         settings
+    Esc               back out one step          ?  or F1       this list
+
+Single-letter shortcuts stand down while focus is in a text field, so the
+app is still typeable. The help sheet is generated from the same table
+the shortcuts are installed from, so it cannot document a keyboard the
+app does not have.
+
+### Light mode is reachable
+
+The light palette had been generated in OKLCH and contrast-checked
+against every surface, and nothing could display it: `apply_mode()` had
+exactly one caller, at import, with `"dark"` hardcoded. Both themes are
+now selectable in Settings and switch live.
+
+Making that work needed a real fix rather than a toggle. Around thirty
+labels carried their colour as an inline stylesheet, which outranks the
+application stylesheet and is therefore frozen at construction - so every
+one of them stayed dark-mode ink. They use theme roles now and re-colour
+with the stylesheet.
+
+### Reply, reply all, forward
+
+The reading pane had two actions (star, delete) and no way to answer a
+message. It now leads with the subject as the page title, states the
+sender once, and offers reply / reply all / forward on the left with
+star / mark unread / delete on the right.
+
+Recipient handling is the part worth stating: reply prefers `Reply-To`
+where the message carried one, reply-all copies the other recipients
+*minus the account that received it*, and forward addresses nobody.
+
+**There is still no Archive.** The folder vocabulary is exactly
+inbox/sent/trash and the integrity checker deletes rows in any other
+folder, so an Archive button would need a schema change, a sync change
+and an IMAP move behind it. A missing feature is better than a
+misleading one.
+
+### Opening
+
+The app opens maximized into the normal Windows work area - taskbar
+visible, ordinary window controls, no kiosk mode, nothing hard-coded.
+
+The opening surface is maximized too, on the same background the shell is
+about to occupy, and cross-dissolves into it. Previously a 340x220 card
+vanished and a differently shaped 1280x800 window appeared somewhere
+else.
+
+The opening bar is a hairline the width of the wordmark, sitting under
+it. It advances on the four real initialization stages and reaches
+completion in exactly one place: when initialization actually finishes.
+A startup too fast for the animation to play skips it rather than
+flashing.
+
+### Also
+
+- Compose gained Cc/Bcc, and send is a state machine: sending, sent and
+  failed each say what happened. A failed send keeps the message and the
+  reason on screen instead of throwing a modal that erases both.
+- Settings gained an Appearance page (theme, row density, reduced
+  motion) and every row now explains what it does.
+- Row density (comfortable/compact) and a collapsible sidebar, which
+  collapses on its own below 1080px and never overrides an explicit
+  choice.
+- Empty, loading and error states all use the same design system.
+
+### Fixed
+
+- Message rows were laid out 14px wider than the viewport, so subjects
+  and snippets were hard-clipped mid-word with no ellipsis and the list
+  grew a horizontal scrollbar it had no use for.
+- The reading pane's leading was 2.2x the type size. Qt's
+  `ProportionalHeight` is a percentage of the font's natural line
+  spacing, not of its size; the token said 165% and meant it.
+- Reply and forward crashed outright - `QTextCursor.Start` does not
+  exist in PySide6.
+- The hover star and trash on a message row were painted, hit-tested and
+  connected to nothing.
+- Toasts covered the toolbar's search field and buttons for four and a
+  half seconds; they sit bottom-right now, and identical notices refresh
+  one card instead of stacking three.
+- Closing the opening window mid-startup crashed the process and the main
+  window never appeared.
+- The primary button was 30px tall while every other button was 32, so
+  Cancel and Save sat two pixels out of line in every dialog.
+- Settings drew two hairlines between every pair of rows.
+- Senders with no name showed `(` as their avatar initial.
+- A long sender name ran under the timestamp beside it; a long subject
+  took seven lines and pushed the message off the pane.
+- Four components ignored the reduced-motion setting, and three eased on
+  a different curve from everything else.
+
+### Backend
+
+Two additions, both required by the above:
+
+- A `reply_to` column, added by the existing additive-migration path, so
+  a reply to a mailing list goes to the list. Databases from earlier
+  versions migrate without data loss.
+- Cc/Bcc on both send paths. Bcc is handled oppositely per transport and
+  deliberately so: kept out of the MIME for SMTP, where the envelope
+  carries it, and written as a header for the Gmail API, which has no
+  envelope and would otherwise never deliver it.
+
+### Tests
+
+245 to 391. The new suites cover the opening sequence, appearance and
+keyboard wiring, list geometry under deliberately awkward data, reply
+field building, and the polish regressions above.
+
 ## v1.2.1
 
 Fixes a serious HTML email rendering bug reported against v1.2.0's

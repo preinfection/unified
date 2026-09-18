@@ -9,6 +9,10 @@ Built with Python, PySide6, and SQLite, Unified focuses on a modern desktop expe
 * Multiple Gmail and IMAP accounts in one inbox
 * Fast local search, with server-side search for older mail
 * Offline access to cached messages
+* Reply, reply-all and forward, with correct recipient handling
+* Full keyboard control - press `?` in the app for the list
+* Warm dark and light themes, and comfortable or compact message rows
+* A collapsible sidebar that gets out of the way on a narrow window
 * Modern native Windows desktop interface
 * Encrypted local email cache
 * Background syncing that never blocks the interface
@@ -32,7 +36,7 @@ Built with Python, PySide6, and SQLite, Unified focuses on a modern desktop expe
 1. Download the latest release:
 
 ```
-Unified-Setup-v1.2.1.exe
+Unified-Setup-v1.3.0.exe
 ```
 
 2. Run the installer.
@@ -63,6 +67,9 @@ This launches Unified directly from the source code.
 | `app/config.py`         | Settings and application paths  |
 | `RELEASE_NOTES.md`      | Version history                 |
 | `tests/`                | Automated test suite            |
+| `tools/shoot.py`        | Renders app screens to PNG for design review |
+| `tools/launch_check.py` | Launches the app end to end against a throwaway profile |
+| `tools/startup_check.py` | Steps the opening sequence and prints the bar's real progression |
 | `assets/`               | Images and application assets   |
 
 ## Usage
@@ -75,10 +82,31 @@ This launches Unified directly from the source code.
 Available actions:
 
 * Search your local mailbox cache, and the mail server for older messages
-* Star, mark read, and manage messages
-* Compose plain-text emails
+* Star, mark read or unread, and manage messages
+* Compose, reply, reply-all and forward (plain text)
 * Load older messages on demand with **Load more**
 * Monitor sync progress and errors from the console
+
+### Keyboard
+
+Unified is usable without the mouse. Press `?` or `F1` for the full list.
+
+| Key | Action |
+| --- | ------ |
+| `j` / `k` or arrows | Next / previous message |
+| `Enter` | Open the focused message |
+| `s` | Star or unstar |
+| `u` | Mark unread |
+| `#` or `Delete` | Delete |
+| `/` or `Ctrl+F` | Search |
+| `n` or `Ctrl+N` | Compose |
+| `r` or `F5` | Sync now |
+| `Ctrl+B` | Collapse or expand the sidebar |
+| `Ctrl+Shift+D` | Switch light and dark |
+| `Ctrl+Shift+C` | Switch comfortable and compact rows |
+| `Ctrl+,` | Settings |
+
+Single-letter shortcuts stand down while you are typing in a text field.
 
 ## How it works
 
@@ -178,6 +206,8 @@ anywhere in the app.
 * Attachments are listed and safety-checked, but cannot be saved yet
 * Email composition currently supports plain text only
 * Per-account views are currently inbox-focused
+* There is no Archive: the folder vocabulary is inbox, sent and trash
+  only, so messages are kept, starred or trashed
 * HTML email is rendered by Qt's rich-text engine, which has no support
   for CSS float, flexbox or grid - very complex responsive layouts fall
   back to a simpler stacked appearance

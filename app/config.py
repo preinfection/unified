@@ -54,6 +54,42 @@ def google_client_secrets_path() -> Path:
 
 _SETTINGS_FILE = "settings.json"
 
+
+def peek_appearance() -> dict:
+    """The theme and motion preference, read before anything else exists.
+
+    WHY THIS IS SEPARATE FROM Settings. The startup window is shown the
+    instant QApplication exists, which is BEFORE the background worker has
+    migrated the install, decrypted the mailbox or opened the database -
+    and therefore before Settings has been constructed. Without this, the
+    opening surface could only ever be painted in the default dark
+    palette, and a user on the light theme would watch the app open dark
+    and then flip. The first frame is not the place to be wrong about
+    which product this is.
+
+    It is a small JSON read with no side effects: it never creates the
+    file, never migrates anything, and falls back to the defaults on any
+    error. Settings still owns the values afterwards.
+    """
+    out = {
+        "theme_mode": DEFAULTS["theme_mode"],
+        "reduced_motion": DEFAULTS["reduced_motion"],
+    }
+    try:
+        path = app_data_dir() / _SETTINGS_FILE
+        if not path.exists():
+            return out
+        with open(path, "r", encoding="utf-8") as f:
+            stored = json.load(f)
+        if isinstance(stored, dict):
+            for key in out:
+                if key in stored:
+                    out[key] = stored[key]
+    except (OSError, json.JSONDecodeError) as e:
+        log.debug("Could not read appearance settings early (%s); using defaults", e)
+    return out
+
+
 DEFAULTS = {
     "sync_interval_minutes": 5,
     "notifications_enabled": True,
@@ -64,6 +100,23 @@ DEFAULTS = {
     # small by default so the first paint of a large mailbox stays fast:
     # 100, then "Load more" -> 200, then 300, and so on.
     "messages_shown": 100,
+
+    # ---- appearance -----------------------------------------------------
+    # "dark" or "light". Both ramps are generated and contrast-measured in
+    # theme.py; this is what decides which one the app binds at startup.
+    # Dark is the default because PRODUCT.md's reader is at a desk in the
+    # evening, which is the scene the warm palette was built from.
+    "theme_mode": "dark",
+    # Comfortable rows (three lines) or compact (two). A mailbox with 40
+    # messages and one with 4,000 want different things, and this is the
+    # one token that separates them.
+    "compact_rows": False,
+    # Motion off makes every transition jump to its END state rather than
+    # be skipped - see app/ui/motion.py. Qt exposes no system
+    # prefers-reduced-motion, so this is the app's own switch.
+    "reduced_motion": False,
+    # Remembered sidebar width state, so the app opens the way it was left.
+    "sidebar_collapsed": False,
 }
 
 

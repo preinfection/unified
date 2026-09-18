@@ -101,6 +101,16 @@ class Database:
                 "UPDATE emails SET body_fetched = 1"
                 " WHERE body_text != '' OR body_html != ''"
             )
+        if "reply_to" not in email_cols:
+            # The message's Reply-To header, where it had one. Needed so a
+            # reply to a mailing list goes to the list rather than to
+            # whoever happened to post - see app/email/reply.py. Rows
+            # cached before this column existed simply have '', and reply
+            # falls back to the sender for them, which is what it did for
+            # every message previously.
+            conn.execute(
+                "ALTER TABLE emails ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn: Optional[sqlite3.Connection] = getattr(self._local, "conn", None)
@@ -210,10 +220,12 @@ class Database:
     _UPSERT_SQL = """
         INSERT INTO emails (account_id, uid, folder, sender_name, sender_email,
             recipients, subject, snippet, body_text, body_html, date_ts,
-            is_read, is_starred, has_attachments, attachments, body_fetched)
+            is_read, is_starred, has_attachments, attachments, body_fetched,
+            reply_to)
         VALUES (:account_id, :uid, :folder, :sender_name, :sender_email,
             :recipients, :subject, :snippet, :body_text, :body_html, :date_ts,
-            :is_read, :is_starred, :has_attachments, :attachments, :body_fetched)
+            :is_read, :is_starred, :has_attachments, :attachments,
+            :body_fetched, :reply_to)
         ON CONFLICT (account_id, folder, uid) DO UPDATE SET
             is_read = excluded.is_read,
             is_starred = excluded.is_starred,
@@ -226,7 +238,9 @@ class Database:
                 THEN excluded.body_text ELSE body_text END,
             body_html = CASE WHEN excluded.body_fetched = 1
                 THEN excluded.body_html ELSE body_html END,
-            body_fetched = MAX(body_fetched, excluded.body_fetched)
+            body_fetched = MAX(body_fetched, excluded.body_fetched),
+            reply_to = CASE WHEN excluded.body_fetched = 1
+                THEN excluded.reply_to ELSE reply_to END
     """
 
     _MSG_DEFAULTS = {
@@ -243,6 +257,7 @@ class Database:
         "has_attachments": 0,
         "attachments": "",
         "body_fetched": 0,
+        "reply_to": "",
     }
 
     def upsert_email(self, msg: dict) -> bool:

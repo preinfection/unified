@@ -15,6 +15,10 @@ dist/
 release/
 *.spec
 
+# Design-review renders produced by tools/shoot.py - regenerate them,
+# do not version them.
+tools/shots/
+
 # Local user data - the app stores everything under %APPDATA%\Unified,
 # never inside the project folder, but these are excluded defensively in
 # case anything is ever run/tested with a project-relative data path.

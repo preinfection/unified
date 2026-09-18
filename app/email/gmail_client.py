@@ -147,7 +147,12 @@ class GmailClient:
                         userId="me",
                         id=msg_id,
                         format="metadata",
-                        metadataHeaders=["From", "To", "Subject", "Date"],
+                        # Reply-To is requested here as well as on the full
+                        # fetch so a reply is addressed correctly even for a
+                        # message whose body has not been downloaded yet.
+                        metadataHeaders=[
+                            "From", "To", "Subject", "Date", "Reply-To",
+                        ],
                     ),
                     request_id=msg_id,
                 )
@@ -236,6 +241,7 @@ class GmailClient:
             "sender_name": sender_name,
             "sender_email": sender_email,
             "recipients": headers.get("to", ""),
+            "reply_to": headers.get("reply-to", ""),
             "subject": headers.get("subject", ""),
             "snippet": data.get("snippet", ""),
             "body_text": "",
@@ -287,6 +293,7 @@ class GmailClient:
             "sender_name": sender_name,
             "sender_email": sender_email,
             "recipients": headers.get("to", ""),
+            "reply_to": headers.get("reply-to", ""),
             "subject": headers.get("subject", ""),
             "snippet": data.get("snippet", "") or make_snippet(body_text, body_html),
             "body_text": body_text,
@@ -389,9 +396,25 @@ class GmailClient:
 
     # ------------------------------------------------------------------- sending
 
-    def send(self, to: str, subject: str, body: str) -> None:
+    def send(self, to: str, subject: str, body: str, *,
+             cc: str = "", bcc: str = "") -> None:
+        """Send a plain-text message.
+
+        BCC IS A HEADER HERE AND NOT IN THE SMTP PATH, which looks
+        inconsistent and is correct. There is no envelope to put it in:
+        the Gmail API takes one opaque RFC822 blob and derives the
+        recipients from its headers, so a Bcc that is not a header is a
+        Bcc that is never delivered. Gmail strips the header before the
+        message reaches anybody, which is what makes it blind. The SMTP
+        client has a real envelope and therefore must NOT write the
+        header - see smtp_client.build_mime.
+        """
         mime = MIMEText(body, "plain", "utf-8")
         mime["To"] = to
+        if cc:
+            mime["Cc"] = cc
+        if bcc:
+            mime["Bcc"] = bcc
         mime["From"] = self.email
         mime["Subject"] = subject
         raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()

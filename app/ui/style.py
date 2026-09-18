@@ -1,12 +1,35 @@
-"""Application-wide stylesheet: dark, modern, restrained accent color use.
+"""Application-wide stylesheet, built from the tokens in theme.py.
 
-Redesigned to match the visual language of the project's Dribbble
-reference (dark charcoal surfaces, soft card elevation, sparing accent
-color) while keeping every widget class the rest of the app already
-relies on (QPushButton, QLineEdit, QListView, QSplitter, etc.) styled
-through plain Qt selectors - no custom widget subclassing required just
-for looks. Colors are pulled from theme.py so this file and the
-custom-painted delegates never disagree about what a color means.
+Every widget class the rest of the app already relies on (QPushButton,
+QLineEdit, QListView, QSplitter, ...) is styled through plain Qt selectors,
+so nothing has to be subclassed just for looks. Colors are pulled from
+theme.py so this file and the custom-painted delegates never disagree about
+what a color means.
+
+-------------------------------------------------------------------------
+WHAT CHANGED IN THE WARM-ARCHIVE PASS, AND WHY
+
+  NO GRADIENTS. The toolbar, the sidebar and the compose button each used
+  a vertical qlineargradient to fake "a lit surface". On a warm near-black
+  ramp that reads as a smudge rather than as light, and a gradient-filled
+  primary button is one of the most reliable tells of a generic dark theme.
+  All four call sites are flat fills now; separation comes from the
+  elevation ramp and a hairline, which is what actually reads.
+
+  SELECTION IS ELEVATION, NOT HUE. Every selected state used to be an
+  accent-tinted fill plus an accent border plus accent text. Now a selected
+  thing sits on BG_SELECTED with primary text. It is one signal, it matches
+  the delegate-painted rows exactly, and it leaves color free to mean
+  something.
+
+  THE PRIMARY BUTTON IS THE BRIGHTEST THING ON SCREEN, not the bluest:
+  ACCENT is warm bone, and its label is the app floor. That is the whole
+  of the emphasis system - luminance, not saturation.
+
+  FEWER CARDS. Panels that were rounded, bordered and shadowed simply to
+  look raised are now plain regions separated by a hairline. What is still
+  a card is a card because it is genuinely a floating surface: menus,
+  dropdown popups, toasts, dialogs.
 """
 
 from __future__ import annotations
@@ -17,6 +40,20 @@ from pathlib import Path
 from app.ui import theme as t
 
 _arrow_cache_path: Path | None = None
+
+
+def invalidate_style_cache() -> None:
+    """Drop anything cached that was rendered FROM the palette.
+
+    Called by MainWindow.set_theme_mode before rebuilding the stylesheet.
+    The combo chevron is a real PNG tinted with TEXT_SECONDARY and written
+    to a temp file once; without this, switching to light mode kept serving
+    the dark-mode chevron - a pale grey arrow on a parchment control, which
+    is the sort of single stale asset that makes a theme switch look half
+    finished.
+    """
+    global _arrow_cache_path
+    _arrow_cache_path = None
 
 
 def _combo_arrow_url() -> str:
@@ -36,7 +73,10 @@ def _combo_arrow_url() -> str:
 
     from app.ui.svg_icon import tinted_pixmap
 
-    path = Path(tempfile.gettempdir()) / "unified_combo_arrow.png"
+    # Named per mode, not one shared file: Qt caches images it has loaded
+    # from a URL, so re-writing the same path with different pixels can
+    # leave the old arrow on screen until something evicts it.
+    path = Path(tempfile.gettempdir()) / f"unified_combo_arrow_{t.MODE}.png"
     tinted_pixmap("chevron_down", 16, t.TEXT_SECONDARY).save(str(path), "PNG")
     _arrow_cache_path = path
     return path.as_posix()
@@ -47,9 +87,12 @@ def get_stylesheet() -> str:
     constant - see _combo_arrow_url."""
     arrow_url = _combo_arrow_url()
     return f"""
+/* NO font-family AND NO font-size HERE. A stylesheet font overrides
+   QWidget.setFont(), so a universal rule setting them silently flattened
+   every make_font() call in the application to 13px - see the long note in
+   app/main.py, which now sets the default font on QApplication instead.
+   Only color is universal; type is a widget's own business. */
 * {{
-    font-family: {t.FONT_FAMILIES_CSS};
-    font-size: {t.SIZE_MD}px;
     color: {t.TEXT_PRIMARY};
 }}
 
@@ -76,27 +119,37 @@ QMainWindow, QDialog {{
 QStackedWidget {{ background: {t.BG_APP}; }}
 
 /* ---- Inputs ---- */
+/* Focus is a full border in the parchment accent, not a colored glow: it
+   is the brightest edge on screen at that moment, which is exactly what a
+   focus ring should be, and it costs no hue. */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QComboBox {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER};
     border-radius: {t.RADIUS_SM}px;
-    padding: 5px 8px;
-    selection-background-color: {t.ACCENT};
-    selection-color: {t.TEXT_ON_ACCENT};
+    padding: 6px 9px;
+    selection-background-color: {t.BG_SELECTED};
+    selection-color: {t.TEXT_PRIMARY};
     color: {t.TEXT_PRIMARY};
 }}
+QLineEdit:hover, QPlainTextEdit:hover, QTextEdit:hover,
+QSpinBox:hover, QComboBox:hover {{ border-color: {t.BORDER_LIGHT}; }}
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
 QSpinBox:focus, QComboBox:focus {{
     border: 1px solid {t.ACCENT};
+    background: {t.BG_HOVER};
 }}
 QLineEdit::placeholder {{ color: {t.TEXT_TERTIARY}; }}
+/* NOT a pill. A fully-rounded search field is a web pattern that reads as
+   decoration in a desktop toolbar; it now matches every other input in the
+   app, which is the point of having one form-control vocabulary. */
 QLineEdit#searchField {{
     background: {t.BG_PANEL};
     border: 1px solid {t.BORDER};
-    border-radius: {t.RADIUS_PILL}px;
-    padding: 5px 10px 5px 8px;
+    border-radius: {t.RADIUS_SM}px;
+    padding: 6px 10px 6px 8px;
 }}
-QLineEdit#searchField:focus {{ border: 1px solid {t.ACCENT}; }}
+QLineEdit#searchField:hover {{ border-color: {t.BORDER_LIGHT}; }}
+QLineEdit#searchField:focus {{ border: 1px solid {t.ACCENT}; background: {t.BG_HOVER}; }}
 QComboBox::drop-down {{ border: none; width: 22px; background: transparent; }}
 QComboBox::down-arrow {{
     image: url({arrow_url});
@@ -105,8 +158,8 @@ QComboBox::down-arrow {{
     margin-right: 6px;
 }}
 QComboBox QAbstractItemView {{
-    background: {t.BG_PANEL};
-    border: 1px solid {t.BORDER};
+    background: {t.BG_OVERLAY};
+    border: 1px solid {t.BORDER_LIGHT};
     selection-background-color: {t.BG_SELECTED};
     selection-color: {t.TEXT_PRIMARY};
     outline: none;
@@ -122,7 +175,7 @@ QWidget#dropdownButton:hover {{ border-color: {t.BORDER_LIGHT}; background: {t.B
 QFrame#dropdownPopup {{
     background: {t.BG_OVERLAY};
     border: 1px solid {t.BORDER_LIGHT};
-    border-radius: {t.RADIUS_MD}px;
+    border-radius: {t.RADIUS_LG}px;
 }}
 QPushButton#dropdownOption {{
     background: transparent;
@@ -130,113 +183,287 @@ QPushButton#dropdownOption {{
     border-radius: {t.RADIUS_XS}px;
     padding: 7px 10px;
     text-align: left;
-    color: {t.TEXT_PRIMARY};
-    font-weight: 500;
+    color: {t.TEXT_SECONDARY};
+    font-weight: {t.WEIGHT_REGULAR};
 }}
-QPushButton#dropdownOption:hover {{ background: {t.BG_HOVER}; }}
+QPushButton#dropdownOption:hover {{ background: {t.BG_HOVER}; color: {t.TEXT_PRIMARY}; }}
 QPushButton#dropdownOption[selected="true"] {{
-    background: {t.ACCENT_SOFT_BG};
-    color: {t.ACCENT_HOVER};
-    font-weight: 600;
+    background: {t.BG_SELECTED};
+    color: {t.TEXT_PRIMARY};
+    font-weight: {t.WEIGHT_MEDIUM};
 }}
 
 /* ---- Buttons ---- */
+/* Secondary buttons are quiet: no fill at rest, a hairline, and they earn
+   a surface on hover. Only ONE button on any given screen is filled. */
 QPushButton {{
-    background: {t.BG_PANEL};
+    background: transparent;
     border: 1px solid {t.BORDER_LIGHT};
     border-radius: {t.RADIUS_SM}px;
     padding: 7px 16px;
-    min-height: {t.HEIGHT_SM - 12}px;
+    min-height: {t.HEIGHT_MD - 16}px;
     color: {t.TEXT_PRIMARY};
-    font-weight: 500;
+    font-weight: {t.WEIGHT_MEDIUM};
 }}
-QPushButton:hover {{ background: {t.BG_HOVER}; border-color: {t.BORDER_LIGHT}; }}
-QPushButton:pressed {{ background: {t.BG_SELECTED}; }}
+QPushButton:hover {{ background: {t.BG_HOVER}; border-color: {t.TEXT_TERTIARY}; }}
+QPushButton:pressed {{ background: {t.BG_PANEL}; }}
+QPushButton:focus {{ border-color: {t.ACCENT}; }}
+/* The one filled button: parchment fill, app-floor label, 16.1:1. */
 QPushButton:default {{
     background: {t.ACCENT};
     color: {t.TEXT_ON_ACCENT};
     border: 1px solid {t.ACCENT};
-    font-weight: 600;
+    font-weight: {t.WEIGHT_SEMIBOLD};
 }}
 QPushButton:default:hover {{ background: {t.ACCENT_HOVER}; border-color: {t.ACCENT_HOVER}; }}
-QPushButton:default:pressed {{ background: {t.ACCENT_PRESSED}; }}
-QPushButton:disabled {{ color: {t.TEXT_TERTIARY}; border-color: {t.BORDER}; background: {t.BG_PANEL}; }}
+QPushButton:default:pressed {{ background: {t.ACCENT_PRESSED}; border-color: {t.ACCENT_PRESSED}; }}
+QPushButton:disabled {{
+    color: {t.TEXT_TERTIARY}; border-color: {t.BORDER}; background: transparent;
+}}
+QPushButton:default:disabled {{
+    background: {t.BG_SELECTED}; color: {t.TEXT_TERTIARY}; border-color: {t.BORDER};
+}}
 QPushButton:checkable:checked {{
-    background: {t.ACCENT_SOFT_BG};
-    border-color: {t.ACCENT};
-    color: {t.ACCENT_HOVER};
+    background: {t.BG_SELECTED};
+    border-color: {t.BORDER_LIGHT};
+    color: {t.TEXT_PRIMARY};
 }}
 
-/* Flat icon-style toolbar buttons (Compose/Refresh/Console) */
+/* ---- The primitive vocabulary (components/primitives.py) ----
+   ONE BUTTON WITH NAMED VARIANTS, and this block is the reason it can
+   exist. Before it, a screen that wanted a quiet button made a bare
+   QPushButton, a screen that wanted a loud one reached for
+   objectName="composeButton", and the empty state accidentally wore the
+   compose action's identity because that was the only filled style with a
+   name. State handling now lives here once per variant instead of being
+   re-derived per call site.
+
+   ONE PRIMARY PER SCREEN. Only btn-primary is filled; everything else
+   earns contrast on hover. */
+/* The fill and border are painted in Button.paintEvent so they can be
+   animated - QSS cannot tween, and an un-tweened :pressed swap is a
+   flicker rather than a press. What stays here is everything Qt still
+   lays out: the label colour, the metrics and the focus ring. A
+   background here as well would be a second, static fill drawn underneath
+   the animated one. */
+QPushButton#btn-primary {{
+    background: transparent;
+    color: {t.TEXT_ON_ACCENT};
+    /* A TRANSPARENT BORDER, NOT NO BORDER, and the difference was two
+       visible pixels. The fill is painted in Button.paintEvent so QSS must
+       not draw a second one - but `border: none` also removes the border
+       from the box model, which made the primary button 30px tall while
+       every other button was 32. "Cancel" and "Save" sat two pixels out of
+       line in every dialog in the app. Transparent keeps the metrics and
+       still lets the painted fill through. */
+    border: 1px solid transparent;
+    border-radius: {t.RADIUS_SM}px;
+    padding: 7px 16px;
+    min-height: {t.HEIGHT_MD - 16}px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
+}}
+QPushButton#btn-primary:hover {{
+    background: {t.ACCENT_HOVER}; border-color: {t.ACCENT_HOVER};
+}}
+QPushButton#btn-primary:pressed {{
+    background: {t.ACCENT_PRESSED}; border-color: {t.ACCENT_PRESSED};
+}}
+/* The focus ring on a filled button has to sit OUTSIDE the fill, or it is
+   invisible against it. A darker outline reads on parchment. */
+QPushButton#btn-primary:focus {{ border: 1px solid {t.TEXT_ON_ACCENT}; }}
+QPushButton#btn-primary:disabled {{
+    background: {t.BG_SELECTED}; color: {t.TEXT_TERTIARY}; border-color: {t.BORDER};
+}}
+
+QPushButton#btn-secondary {{
+    background: transparent;
+    color: {t.TEXT_PRIMARY};
+    border: 1px solid {t.BORDER_LIGHT};
+    border-radius: {t.RADIUS_SM}px;
+    padding: 7px 16px;
+    min-height: {t.HEIGHT_MD - 16}px;
+    font-weight: {t.WEIGHT_MEDIUM};
+}}
+QPushButton#btn-secondary:hover {{
+    background: {t.BG_HOVER}; border-color: {t.TEXT_TERTIARY};
+}}
+QPushButton#btn-secondary:pressed {{ background: {t.BG_PANEL}; }}
+QPushButton#btn-secondary:focus {{ border-color: {t.ACCENT}; }}
+QPushButton#btn-secondary:disabled {{
+    color: {t.TEXT_TERTIARY}; border-color: {t.BORDER};
+}}
+
+/* No border at rest: for inline and toolbar actions, where a row of
+   bordered buttons would read as a row of boxes. */
+/* Tighter horizontally than the bordered variants, and only there: a
+   ghost has no edge, so the same 16px would leave it looking detached
+   from whatever it sits beside. The vertical metrics are identical, so it
+   still shares a baseline with them. */
+QPushButton#btn-ghost {{
+    background: transparent;
+    color: {t.TEXT_SECONDARY};
+    border: 1px solid transparent;
+    border-radius: {t.RADIUS_SM}px;
+    padding: 7px 12px;
+    min-height: {t.HEIGHT_MD - 16}px;
+    font-weight: {t.WEIGHT_MEDIUM};
+}}
+QPushButton#btn-ghost:hover {{ background: {t.BG_HOVER}; color: {t.TEXT_PRIMARY}; }}
+QPushButton#btn-ghost:pressed {{ background: {t.BG_PANEL}; }}
+QPushButton#btn-ghost:focus {{ border-color: {t.ACCENT}; color: {t.TEXT_PRIMARY}; }}
+QPushButton#btn-ghost:disabled {{ color: {t.TEXT_TERTIARY}; }}
+QPushButton#btn-ghost:checked {{
+    background: {t.BG_SELECTED}; color: {t.TEXT_PRIMARY};
+}}
+
+/* Destructive is the error hue and NOT a filled red slab: a filled red
+   button is the loudest thing on any screen it appears on, which is the
+   wrong emphasis for an action nobody should be encouraged toward. It
+   states its consequence in its label color and fills only on hover, at
+   the moment the pointer is already committed. */
+QPushButton#btn-destructive {{
+    background: transparent;
+    color: {t.DESTRUCTIVE};
+    border: 1px solid {t.BORDER_LIGHT};
+    border-radius: {t.RADIUS_SM}px;
+    padding: 7px 16px;
+    min-height: {t.HEIGHT_MD - 16}px;
+    font-weight: {t.WEIGHT_MEDIUM};
+}}
+QPushButton#btn-destructive:hover {{
+    background: {t.DESTRUCTIVE}; color: {t.TEXT_ON_ACCENT};
+    border-color: {t.DESTRUCTIVE};
+}}
+QPushButton#btn-destructive:pressed {{
+    background: {t.DESTRUCTIVE_HOVER}; border-color: {t.DESTRUCTIVE_HOVER};
+}}
+QPushButton#btn-destructive:focus {{ border-color: {t.DESTRUCTIVE}; }}
+QPushButton#btn-destructive:disabled {{
+    color: {t.TEXT_TERTIARY}; border-color: {t.BORDER};
+}}
+
+QPushButton#btn-icon {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: {t.RADIUS_SM}px;
+    padding: 0;
+}}
+QPushButton#btn-icon:hover {{ background: {t.BG_HOVER}; }}
+QPushButton#btn-icon:pressed {{ background: {t.BG_PANEL}; }}
+QPushButton#btn-icon:focus {{ border-color: {t.ACCENT}; }}
+QPushButton#btn-icon:checked {{
+    background: {t.BG_SELECTED}; border-color: {t.BORDER_LIGHT};
+}}
+/* ONE SIGNAL PER STATE. A toggle whose GLYPH changes - the star going
+   from outline to filled, and from ink to the starred amber - is already
+   saying that it is on. Adding the checked surface underneath turned the
+   starred button into a small filled amber block: the loudest object on
+   the reading pane, louder than the primary action, reporting a state the
+   icon had already reported. Buttons that carry their state in the glyph
+   opt out of the surface with this property. */
+QPushButton#btn-icon[toggles-glyph="true"]:checked {{
+    background: transparent; border-color: transparent;
+}}
+QPushButton#btn-icon[toggles-glyph="true"]:checked:hover {{
+    background: {t.BG_HOVER};
+}}
+
+QLabel#badge {{
+    background: {t.BG_SELECTED};
+    color: {t.TEXT_SECONDARY};
+    border-radius: {t.RADIUS_PILL}px;
+    padding: 1px 7px;
+    font-family: {t.FONT_MONO_CSS};
+}}
+QFrame#rule {{ background: {t.BORDER}; border: none; }}
+QWidget#toolbarBand {{
+    background: {t.BG_SIDEBAR};
+    border: none;
+    border-bottom: 1px solid {t.BORDER};
+}}
+/* A field that failed validation states it on its own edge as well as in
+   its hint line, because a hint under a long form is easy to miss. */
+QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"],
+QComboBox[invalid="true"], QSpinBox[invalid="true"] {{
+    border-color: {t.DESTRUCTIVE};
+}}
+
+/* Flat icon-style toolbar buttons (Refresh/Console) */
 QPushButton#iconButton {{
     background: transparent;
     border: 1px solid transparent;
     border-radius: {t.RADIUS_SM}px;
     padding: 6px;
-    font-weight: 500;
+    font-weight: {t.WEIGHT_MEDIUM};
 }}
 QPushButton#iconButton:hover {{ background: {t.BG_HOVER}; border-color: {t.BORDER}; }}
-QPushButton#iconButton:pressed {{ background: {t.BG_SELECTED}; }}
+QPushButton#iconButton:pressed {{ background: {t.BG_PANEL}; }}
+QPushButton#iconButton:focus {{ border-color: {t.ACCENT}; }}
 QPushButton#iconButton:checkable:checked {{
-    background: {t.ACCENT_SOFT_BG};
-    color: {t.ACCENT_HOVER};
-    border-color: {t.ACCENT};
+    background: {t.BG_SELECTED};
+    color: {t.TEXT_PRIMARY};
+    border-color: {t.BORDER_LIGHT};
 }}
 
-/* Pill-style folder navigation (Unified Inbox / Starred / Sent / Trash).
-   The selected pill carries a soft accent-tinted border on top of the
-   fill (not just a flat tint) - closer to the reference's "selected"
-   read, which always pairs a fill with a visible edge, not fill alone. */
-/* Reference tab-button anatomy: a transparent row that fades to a
-   surface fill on hover, and on selection takes an accent-tinted fill
-   with accent-colored label. The 3px left accent bar the reference grows
-   from zero height is painted by NavPill itself (components/nav_pill.py)
-   since QSS cannot animate it. */
+/* Folder navigation (Unified Inbox / Starred / Sent / Trash).
+   ONE SIGNAL PER STATE. This used to stack an accent fill, an accent text
+   color, a weight change AND a 3px animated bar down the left edge - four
+   cues for one boolean. A selected item is now a raised warm surface with
+   primary text; NavPill animates that fill in rather than growing a stripe
+   (see components/nav_pill.py). */
 QPushButton#navPill {{
     background: transparent;
     border: none;
-    border-radius: {t.RADIUS_SM}px;
-    padding: 6px 10px 6px 18px;
+    border-radius: {t.RADIUS_MD}px;
+    padding: 6px 10px 6px 12px;
     text-align: left;
     color: {t.TEXT_SECONDARY};
-    font-weight: 500;
+    font-weight: {t.WEIGHT_MEDIUM};
     min-height: {t.TAB_HEIGHT - 12}px;
 }}
-QPushButton#navPill:hover {{ background: {t.BG_PANEL}; color: {t.TEXT_PRIMARY}; }}
-QPushButton#navPill:checked {{
-    background: {t.ACCENT_SOFT_BG};
-    color: {t.ACCENT};
-    font-weight: 600;
+/* COLLAPSED, THE PILL IS A SQUARE AND ITS GLYPH IS CENTRED IN IT. Left
+   alignment plus a 12px left pad is right for "icon, then label"; with the
+   label gone it just parks the icon off-centre in a 56px rail, and the
+   nav icons, the collapse control and the account avatars each ended up
+   on a slightly different vertical line. */
+QPushButton#navPill[railed="true"] {{
+    padding: 6px 0;
+    text-align: center;
 }}
+QPushButton#navPill:hover {{ color: {t.TEXT_PRIMARY}; }}
+QPushButton#navPill:checked {{
+    color: {t.TEXT_PRIMARY};
+    font-weight: {t.WEIGHT_MEDIUM};
+}}
+QPushButton#navPill:focus {{ color: {t.TEXT_PRIMARY}; }}
 
-/* Primary compose action - a subtle vertical gradient and taller target
-   than a flat-fill button, so the app's one primary action reads as
-   unmistakably primary rather than just "the blue button". */
+/* Primary compose action. Flat parchment, no gradient, no glow. */
 QPushButton#composeButton {{
-    background: {t.vgradient(t.ACCENT_HOVER, t.ACCENT)};
+    background: {t.ACCENT};
     color: {t.TEXT_ON_ACCENT};
     border: 1px solid {t.ACCENT};
     border-radius: {t.RADIUS_SM}px;
-    font-weight: 700;
-    padding: 9px 20px;
-    min-height: {t.HEIGHT_MD - 18}px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
+    padding: 8px 18px;
+    min-height: {t.HEIGHT_MD - 16}px;
 }}
-QPushButton#composeButton:hover {{ background: {t.vgradient(t.ACCENT_GLOW, t.ACCENT_HOVER)}; }}
-QPushButton#composeButton:pressed {{ background: {t.ACCENT_PRESSED}; }}
+QPushButton#composeButton:hover {{ background: {t.ACCENT_HOVER}; border-color: {t.ACCENT_HOVER}; }}
+QPushButton#composeButton:pressed {{ background: {t.ACCENT_PRESSED}; border-color: {t.ACCENT_PRESSED}; }}
 QPushButton#composeButton:disabled {{
     background: {t.BG_SELECTED}; color: {t.TEXT_TERTIARY}; border-color: {t.BORDER};
 }}
 
-/* AccentButton (components/button.py) paints its own animated gradient
-   background in paintEvent - this just strips Qt's default chrome so
-   that custom paint isn't fought by a second background underneath it. */
+/* Retired: the animated primary fill is now primitives.Button(PRIMARY),
+   so every primary action in the app shares one press behaviour instead
+   of two vocabularies disagreeing about it. Kept as a no-op shell only in
+   case an out-of-tree widget still carries the name. */
 QPushButton#accentButton {{
     background: transparent;
     border: none;
     border-radius: {t.RADIUS_SM}px;
     padding: 8px 20px;
     color: {t.TEXT_ON_ACCENT};
-    font-weight: 700;
+    font-weight: {t.WEIGHT_SEMIBOLD};
 }}
 QPushButton#accentButton:disabled {{ color: {t.TEXT_TERTIARY}; }}
 
@@ -250,7 +477,7 @@ QTreeWidget, QListWidget, QTreeView, QTableView, QListView {{
     color: {t.TEXT_PRIMARY};
 }}
 QTreeWidget::item, QListWidget::item {{
-    padding: 4px 2px;
+    padding: 5px 3px;
     border: none;
 }}
 QTreeWidget::item:selected, QListWidget::item:selected {{
@@ -264,200 +491,271 @@ QHeaderView::section {{
     background: {t.BG_PANEL};
     border: none;
     border-bottom: 1px solid {t.BORDER};
-    padding: 4px 6px;
-    font-weight: 600;
-    color: {t.TEXT_SECONDARY};
+    padding: 5px 6px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
+    color: {t.TEXT_TERTIARY};
 }}
 
 /* ---- Splitter ---- */
+/* The hover state is a lighter hairline, not the accent: dragging a pane
+   divider is not a state worth spending the app's brightest value on. */
 QSplitter::handle {{ background: {t.BORDER}; width: 1px; }}
-QSplitter::handle:hover {{ background: {t.ACCENT}; }}
+QSplitter::handle:hover {{ background: {t.BORDER_LIGHT}; }}
 
 /* ---- Scrollbars ---- */
-/* Slim, closer to the reference's thin WAL-style scrollbars than a
-   conventional wide OS scrollbar - it recedes when not needed instead of
-   claiming a visible strip of the reading pane at all times. */
-QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
+/* Slim and quiet, so a scrollbar never claims a visible strip of the
+   reading pane while nothing is being scrolled. */
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
 QScrollBar::handle:vertical {{
-    background: {t.BORDER_LIGHT}; border-radius: 3px; min-height: 24px;
+    background: {t.BORDER_LIGHT}; border-radius: {t.RADIUS_XS}px; min-height: 28px;
 }}
 QScrollBar::handle:vertical:hover {{ background: {t.TEXT_TERTIARY}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
-QScrollBar:horizontal {{ background: transparent; height: 6px; margin: 0; }}
+QScrollBar:horizontal {{ background: transparent; height: 8px; margin: 0; }}
 QScrollBar::handle:horizontal {{
-    background: {t.BORDER_LIGHT}; border-radius: 3px; min-width: 24px;
+    background: {t.BORDER_LIGHT}; border-radius: {t.RADIUS_XS}px; min-width: 28px;
 }}
+QScrollBar::handle:horizontal:hover {{ background: {t.TEXT_TERTIARY}; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
 /* ---- Toolbar ---- */
-/* A faint top-lit gradient instead of a flat fill, plus a two-tone bottom
-   edge (a solid line with an accent-tinted hairline glow under it) - the
-   header reads as a distinct, lit bar the content sits below, not just a
-   background color change. */
+/* Flat, on the sidebar's surface, separated from the content by a single
+   hairline. It was a vertical gradient with a second accent-tinted hairline
+   glowing under the first; that is three devices to say "there is a line
+   here". */
 QToolBar {{
-    background: {t.vgradient(t.BG_SIDEBAR, t.BG_APP)};
+    background: {t.BG_SIDEBAR};
+    border: none;
     border-bottom: 1px solid {t.BORDER};
-    spacing: 10px;
-    padding: 13px 16px;
+    spacing: 8px;
+    padding: 10px 16px;
 }}
-QToolBar::separator {{ background: {t.BORDER}; width: 1px; margin: 4px 6px; }}
+QToolBar::separator {{ background: {t.BORDER}; width: 1px; margin: 5px 8px; }}
 
 /* ---- Menus ---- */
 QMenu {{
     background: {t.BG_OVERLAY};
     border: 1px solid {t.BORDER_LIGHT};
-    border-radius: {t.RADIUS_MD}px;
+    border-radius: {t.RADIUS_LG}px;
     padding: 6px;
 }}
-QMenu::item {{ padding: 7px 26px 7px 14px; border-radius: {t.RADIUS_XS}px; color: {t.TEXT_PRIMARY}; }}
-QMenu::item:selected {{ background: {t.BG_SELECTED}; }}
+QMenu::item {{
+    padding: 7px 26px 7px 14px;
+    border-radius: {t.RADIUS_XS}px;
+    color: {t.TEXT_SECONDARY};
+}}
+QMenu::item:selected {{ background: {t.BG_SELECTED}; color: {t.TEXT_PRIMARY}; }}
 QMenu::separator {{ height: 1px; background: {t.BORDER}; margin: 6px 10px; }}
 
 /* ---- Progress ---- */
+/* Parchment, not a colored bar: progress is not a verdict, and the three
+   verdict colors are spoken for. */
 QProgressBar {{
-    border: 1px solid {t.BORDER};
-    border-radius: {t.RADIUS_SM}px;
-    background: {t.BG_PANEL};
+    border: none;
+    border-radius: {t.RADIUS_XS}px;
+    background: {t.BG_SELECTED};
     text-align: center;
-    min-height: 6px;
-    max-height: 6px;
+    min-height: 3px;
+    max-height: 3px;
 }}
-QProgressBar::chunk {{ background: {t.ACCENT}; border-radius: {t.RADIUS_SM - 1}px; }}
+QProgressBar::chunk {{ background: {t.ACCENT}; border-radius: {t.RADIUS_XS}px; }}
 
 /* ---- Console filter pills ---- */
 QPushButton#consoleFilter {{
     background: transparent;
     border: 1px solid {t.BORDER};
     border-radius: {t.RADIUS_PILL}px;
-    padding: 3px 10px;
-    font-size: 11px;
-    font-weight: 600;
-    color: {t.TEXT_SECONDARY};
+    padding: 3px 11px;
+    font-size: {t.SIZE_XS}px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
+    color: {t.TEXT_TERTIARY};
 }}
 QPushButton#consoleFilter:hover {{ background: {t.BG_HOVER}; color: {t.TEXT_PRIMARY}; }}
 QPushButton#consoleFilter:checked {{
-    background: {t.ACCENT_SOFT_BG};
-    border-color: {t.ACCENT};
-    color: {t.ACCENT_HOVER};
+    background: {t.BG_SELECTED};
+    border-color: {t.BORDER_LIGHT};
+    color: {t.TEXT_PRIMARY};
 }}
 
 /* ---- Console ---- */
 QPlainTextEdit#console {{
     border: 1px solid {t.BORDER};
     border-radius: {t.RADIUS_SM}px;
-    background: {t.BG_PANEL};
+    background: {t.BG_APP};
     color: {t.TEXT_SECONDARY};
-    font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
-    font-size: 12px;
-    padding: 6px;
+    font-family: {t.FONT_MONO_CSS};
+    font-size: {t.SIZE_SM}px;
+    padding: 10px;
 }}
 
 /* ---- Misc ---- */
+/* min-height, not just padding: the status line was being clipped against
+   the bottom of the window - the last message ("Recovered mailbox after an
+   interrupted session") rendered with its descenders cut off. A status bar
+   that cannot show a whole sentence is worse than none. */
 QStatusBar {{
-    background: {t.BG_APP};
+    background: {t.BG_SIDEBAR};
     border-top: 1px solid {t.BORDER};
-    color: {t.TEXT_SECONDARY};
+    color: {t.TEXT_TERTIARY};
+    padding: 0 {t.SPACE_LG}px;
+    min-height: 30px;
 }}
+QStatusBar QLabel {{ color: {t.TEXT_TERTIARY}; }}
 QStatusBar::item {{ border: none; }}
 QLabel {{ background: transparent; }}
+
+/* ---- Text roles ----
+   THE REASON THEME SWITCHING WORKS AT ALL. Thirty-odd labels across the
+   app used to carry their colour as an inline
+   `setStyleSheet(f"color: {{t.TEXT_TERTIARY}}")`, which bakes whichever
+   palette was bound at construction into the widget forever. Re-applying
+   the application stylesheet - the whole mechanism for changing theme -
+   cannot reach an inline rule, because an inline stylesheet outranks it.
+   Switching to light mode therefore left every one of those labels still
+   painted in dark-mode ink.
+
+   A dynamic property instead of an objectName, because objectName is
+   already spoken for by component identity (#searchField, #navPill) and a
+   widget needs to be able to say what it IS and how loud it is at the same
+   time. Qt re-evaluates these on every setStyleSheet, so a role-tagged
+   label re-colours itself for free. */
+QLabel[role="primary"] {{ color: {t.TEXT_PRIMARY}; }}
+QLabel[role="secondary"] {{ color: {t.TEXT_SECONDARY}; }}
+QLabel[role="tertiary"] {{ color: {t.TEXT_TERTIARY}; }}
+QLabel[role="danger"] {{ color: {t.DESTRUCTIVE}; }}
+QLabel[role="warning"] {{ color: {t.WARNING}; }}
+QLabel[role="success"] {{ color: {t.SUCCESS}; }}
+QLabel[role="on-accent"] {{ color: {t.TEXT_ON_ACCENT}; }}
+
 QLabel#secondary {{ color: {t.TEXT_SECONDARY}; }}
-QLabel#tertiary {{ color: {t.TEXT_TERTIARY}; font-size: 12px; }}
-QLabel#heading {{ font-size: 16px; font-weight: 700; color: {t.TEXT_PRIMARY}; }}
+QLabel#tertiary {{ color: {t.TEXT_TERTIARY}; font-size: {t.SIZE_SM}px; }}
+QLabel#heading {{
+    font-size: {t.SIZE_XL}px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
+    color: {t.TEXT_PRIMARY};
+}}
 QLabel#sectionLabel {{
     color: {t.TEXT_TERTIARY};
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1px;
+    font-size: {t.SIZE_XS}px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
+    letter-spacing: 1.1px;
+}}
+QLabel#mono {{
+    font-family: {t.FONT_MONO_CSS};
+    color: {t.TEXT_TERTIARY};
+    font-size: {t.SIZE_SM}px;
 }}
 /* An explicit color (not "transparent") avoids a QAbstractScrollArea
    viewport-compositing quirk where a transparent background can paint
    as opaque black instead of showing the parent's color through. */
-QTextBrowser {{ border: none; background: {t.BG_PANEL}; color: {t.TEXT_PRIMARY}; padding: 14px 16px; }}
-/* The reading pane's message body: the same elevated-card treatment as
-   the sender-info card above it (rounded, bordered, lighter top edge) so
-   the two read as one continuous surface instead of a styled card sitting
-   on top of a flat, unstyled QTextDocument viewport. */
+QTextBrowser {{
+    border: none;
+    background: {t.BG_APP};
+    color: {t.TEXT_PRIMARY};
+    padding: 14px 16px;
+}}
+/* THE READING PANE IS A PAGE. No card, no border, no radius, no shadow:
+   the message body sits directly on the app floor with generous padding,
+   and html_view.py caps the measure so a line never runs past ~72
+   characters. A bordered rounded box around body text is a container
+   pretending to be a document. */
 QTextBrowser#emailBody {{
-    border: 1px solid {t.BORDER};
-    border-top: 1px solid {t.BORDER_LIGHT};
-    border-radius: {t.RADIUS_LG}px;
-    background: {t.BG_PANEL};
-    padding: 18px 20px;
+    border: none;
+    background: {t.BG_APP};
+    padding: {t.SPACE_XL}px {t.SPACE_XL}px;
 }}
 QGroupBox {{
-    background: {t.BG_PANEL};
-    border: 1px solid {t.BORDER};
-    border-radius: {t.RADIUS_MD}px;
-    margin-top: 12px;
-    padding-top: 10px;
-    font-weight: 600;
+    background: transparent;
+    border: none;
+    border-top: 1px solid {t.BORDER};
+    margin-top: 14px;
+    padding-top: 14px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 6px;
-    color: {t.TEXT_SECONDARY};
+    left: 0px;
+    padding: 0 8px 0 0;
+    color: {t.TEXT_TERTIARY};
+    font-size: {t.SIZE_XS}px;
+    letter-spacing: 1.1px;
 }}
-QCheckBox {{ background: transparent; }}
+QCheckBox {{ background: transparent; spacing: 8px; }}
 QCheckBox::indicator {{
     width: 16px; height: 16px;
     border: 1px solid {t.BORDER_LIGHT}; border-radius: {t.RADIUS_XS}px;
     background: {t.BG_PANEL};
 }}
 QCheckBox::indicator:checked {{ background: {t.ACCENT}; border-color: {t.ACCENT}; }}
-QCheckBox::indicator:hover {{ border-color: {t.ACCENT}; }}
+QCheckBox::indicator:hover {{ border-color: {t.TEXT_TERTIARY}; }}
 
 /* ---- Tooltips ---- */
 QToolTip {{
     background: {t.BG_OVERLAY};
     color: {t.TEXT_PRIMARY};
     border: 1px solid {t.BORDER_LIGHT};
-    border-radius: {t.RADIUS_XS}px;
-    padding: 4px 8px;
+    border-radius: {t.RADIUS_SM}px;
+    padding: 5px 9px;
 }}
 
 /* ---- Sidebar (account drawer) ---- */
 QWidget#sidebar {{
-    background: {t.vgradient(t.BG_SIDEBAR, t.BG_APP)};
+    background: {t.BG_SIDEBAR};
+    border: none;
     border-right: 1px solid {t.BORDER};
 }}
 QLabel#accountEmail {{
     color: {t.TEXT_PRIMARY};
-    font-weight: 600;
+    font-weight: {t.WEIGHT_MEDIUM};
 }}
+/* A count, so it is set in the mono face and reads as a value. Not filled
+   with the accent: an unread count is information, not the primary action
+   on the screen, and a bright chip per account would be four of them. */
 QLabel#unreadBadge {{
-    background: {t.ACCENT};
-    color: {t.TEXT_ON_ACCENT};
+    background: {t.BG_SELECTED};
+    color: {t.TEXT_SECONDARY};
     border-radius: {t.RADIUS_PILL}px;
     padding: 1px 7px;
-    font-size: 11px;
-    font-weight: 700;
+    font-family: {t.FONT_MONO_CSS};
+    font-size: {t.SIZE_XS}px;
+    font-weight: {t.WEIGHT_SEMIBOLD};
 }}
 
-/* ---- Preview pane elevated card ---- */
-/* A lighter top edge than the other three sides is a cheap stand-in for a
-   soft top-lit "sheen" on a flat-shaded surface - it reads as a hint of
-   light hitting the top of a raised card without a real gradient fill. */
-QWidget#previewCard {{
-    background: {t.BG_PANEL};
-    border: 1px solid {t.BORDER};
-    border-top: 1px solid {t.BORDER_LIGHT};
-    border-radius: {t.RADIUS_LG}px;
+/* ---- Preview pane ---- */
+/* THE READING PANE IS ONE SURFACE. The header, the action row and the
+   body all sit on the app floor and are divided by hairlines, not by
+   nested bordered boxes. What was here before was a card inside a card:
+   a rounded, bordered, drop-shadowed header block stacked on a rounded,
+   bordered, drop-shadowed body block - which in light mode read as two
+   white slabs floating on parchment. */
+QWidget#previewHeader, QWidget#previewActions {{
+    background: transparent;
+    border: none;
 }}
-/* Privacy notice shown when a message's remote images were withheld. */
+/* Kept for any caller still naming the old block. */
+QWidget#previewCard {{
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid {t.BORDER};
+}}
+/* Privacy notice shown when a message's remote images were withheld.
+   This one IS bordered: it is an interruption in the reading flow and has
+   to read as inserted rather than as part of the message. */
 QWidget#blockedImagesBar {{
     background: {t.BG_PANEL};
-    border: 1px solid {t.BORDER};
+    border: 1px solid {t.BORDER_LIGHT};
     border-radius: {t.RADIUS_SM}px;
 }}
 
 QWidget#attachmentChip {{
-    background: {t.BG_SELECTED};
-    border: 1px solid {t.BORDER_LIGHT};
+    background: {t.BG_PANEL};
+    border: 1px solid {t.BORDER};
     border-radius: {t.RADIUS_SM}px;
 }}
+QWidget#attachmentChip:hover {{ border-color: {t.BORDER_LIGHT}; }}
 QWidget#attachmentChip QLabel {{
     color: {t.TEXT_SECONDARY};
-    font-size: 12px;
+    font-size: {t.SIZE_SM}px;
 }}
 
 /* ---- Email list container ---- */
@@ -465,7 +763,7 @@ QListView#emailList {{
     background: {t.BG_APP};
     border: none;
     border-right: 1px solid {t.BORDER};
-    padding: 4px;
+    padding: {t.SPACE_XS}px {t.SPACE_SM}px;
 }}
 
 /* ---- Compose ---- */
@@ -478,33 +776,42 @@ QLineEdit#composeField, QComboBox#composeField {{
     border-radius: 0;
     padding: {t.SPACE_XS}px 0;
 }}
+QLineEdit#composeField:focus, QComboBox#composeField:focus {{
+    background: transparent;
+    border: none;
+}}
 QWidget#composeFieldRow {{
     border-bottom: 1px solid {t.BORDER};
 }}
 QWidget#composeFields {{
-    background: {t.BG_PANEL};
-    border: 1px solid {t.BORDER};
-    border-top: 1px solid {t.BORDER_LIGHT};
-    border-radius: {t.RADIUS_LG}px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid {t.BORDER};
+    border-radius: 0;
 }}
+/* No padding at all: the body's first character has to land on the same
+   x as the "From"/"To"/"Subject" captions, and QPlainTextEdit already adds
+   a document margin of its own on top of anything set here (zeroed in
+   compose_dialog.py, since QSS cannot reach it). No font-size either - the
+   widget asks for the reading preset with setFont, and a size here would
+   override it exactly the way the old universal rule did. */
 QPlainTextEdit#composeBody {{
     background: transparent;
     border: none;
-    padding: 0 2px;
+    padding: 0;
 }}
 
 /* ---- Settings ---- */
 QWidget#settingsPanel {{
-    background: {t.BG_PANEL};
-    border: 1px solid {t.BORDER};
-    border-top: 1px solid {t.BORDER_LIGHT};
-    border-radius: {t.RADIUS_LG}px;
+    background: transparent;
+    border: none;
 }}
 QWidget#settingsRow {{
     background: transparent;
+    border-bottom: 1px solid {t.BORDER};
 }}
 QSpinBox#settingsControl {{
-    background: {t.BG_OVERLAY};
+    background: {t.BG_PANEL};
     min-width: 90px;
 }}
 QToolButton#settingsRailItem {{
@@ -513,12 +820,12 @@ QToolButton#settingsRailItem {{
     border-radius: {t.RADIUS_MD}px;
     padding: 10px 4px;
     color: {t.TEXT_SECONDARY};
-    font-weight: 600;
+    font-weight: {t.WEIGHT_MEDIUM};
 }}
 QToolButton#settingsRailItem:hover {{ background: {t.BG_HOVER}; color: {t.TEXT_PRIMARY}; }}
 QToolButton#settingsRailItem:checked {{
-    background: {t.ACCENT_SOFT_BG};
-    border: 1px solid {t.ACCENT};
+    background: {t.BG_SELECTED};
+    border: 1px solid transparent;
     color: {t.TEXT_PRIMARY};
 }}
 """

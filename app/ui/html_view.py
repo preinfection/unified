@@ -59,7 +59,7 @@ from functools import lru_cache
 from html.parser import HTMLParser
 
 from PySide6.QtCore import QByteArray, QObject, QThreadPool, QRunnable, QTimer, QUrl, Signal, Qt
-from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QTextDocument
+from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QImage, QPainter, QTextDocument
 from PySide6.QtWidgets import QTextBrowser
 
 from app.ui import theme as t
@@ -539,6 +539,13 @@ class HtmlMailView(QTextBrowser):
         # Only takes effect for plain-text bodies - real HTML mail carries
         # its own fonts, which this deliberately never overrides.
         self.setFont(t.make_font("body"))
+        # True while a plain-text body is on screen: only then does this
+        # widget typeset anything (size, leading, measure).
+        self._plain_mode = False
+        # How much width the measure cap is currently holding back. Kept so
+        # the available width can be recovered on the next recalculation
+        # rather than shrinking a little further on every resize.
+        self._right_margin = 0
         self._html = ""
         self._images: dict[str, QImage] = {}
         self._pending: set[str] = set()
@@ -594,12 +601,120 @@ class HtmlMailView(QTextBrowser):
         QThreadPool.globalInstance().start(task)
 
     def set_email_text(self, text: str) -> None:
+        """A plain-text body, typeset as a page rather than dumped in a box.
+
+        THIS IS THE ONE BODY PATH THE APP IS ALLOWED TO TYPESET. Real HTML
+        mail carries its own fonts, colors and layout and this widget
+        deliberately never overrides them (see the class docstring). A
+        plain-text body has no design of its own, so leaving it at the UI's
+        13px with Qt's default single leading, running the full width of a
+        wide window, is not neutrality - it is just the worst available
+        setting for reading.
+
+        Three things change here and nowhere else:
+          * 15px instead of the 13px UI size,
+          * 165% leading instead of Qt's 100%,
+          * the measure capped at ~72 characters (_apply_reading_measure).
+
+        A line of 140 characters is measurably harder to track back from
+        than one of 72; this is the surface people spend minutes on.
+        """
         self._images.clear()
         self._html = ""
         self._pending.clear()
         self._generation += 1  # invalidate any normalize task still in flight
         self.setStyleSheet("")  # plain text has no theme of its own to preserve
+        self._plain_mode = True
+        self.setFont(t.make_font("reading"))
         self.setPlainText(text)
+        self._apply_reading_leading()
+        self._apply_reading_measure()
+
+    def _apply_reading_leading(self) -> None:
+        """Line height and paragraph spacing across the plain-text document.
+
+        Applied with a cursor rather than a stylesheet because
+        setDefaultStyleSheet only reaches content set through setHtml, and
+        this path is deliberately plain text.
+
+        READING_LINE_HEIGHT IS A PERCENTAGE OF THE TYPE SIZE, like CSS
+        line-height, and it must be converted before Qt sees it. This was
+        the bug that made the reading pane look wrong while every number in
+        the design system looked right: Qt's ProportionalHeight is a
+        percentage of the font's own NATURAL line spacing, not of its size,
+        and Segoe UI at 15px reports a natural spacing of 20px - already
+        1.33x the size. Handing it 165 therefore asked for 20 * 1.65 = 33px
+        of leading, a ratio of 2.2 to the type size where body copy wants
+        1.5-1.65. Measured with QFontMetrics, not guessed. The pane read as
+        airy to the point of disconnected, and the token was not the thing
+        that was wrong.
+
+        FixedHeight with an explicit pixel value, rather than a rescaled
+        proportional figure, because it lands on the same measured leading
+        whichever face actually resolves at runtime - Segoe, Cascadia and
+        Arial all report different natural spacings for the same size.
+        """
+        from PySide6.QtGui import QFontMetrics, QTextBlockFormat, QTextCursor
+
+        target = round(t.SIZE_READING * t.READING_LINE_HEIGHT / 100.0)
+        # Never tighter than the face can set without clipping descenders,
+        # whatever the token says.
+        target = max(target, QFontMetrics(t.make_font("reading")).height())
+
+        block = QTextBlockFormat()
+        block.setLineHeight(
+            target, QTextBlockFormat.LineHeightTypes.FixedHeight.value,
+        )
+        # Paragraphs have to separate from lines. At this leading a blank
+        # line between two paragraphs is indistinguishable from the gap
+        # inside one, so the break is carried by real space instead.
+        block.setBottomMargin(float(t.SPACE_MD))
+        cursor = QTextCursor(self.document())
+        cursor.select(QTextCursor.SelectionType.Document)
+        cursor.mergeBlockFormat(block)
+
+    # A representative prose sample, not a repeated character: measuring
+    # READING_MEASURE_CH copies of "0" or "n" in a proportional face gives
+    # a target that is wrong by 30-40% in either direction depending on the
+    # font. This is 72 characters of ordinary English, so its advance IS
+    # the width of a 72-character line in whatever face is actually
+    # resolved at runtime.
+    _MEASURE_SAMPLE = (
+        "The quick brown fox jumps over the lazy dog and then sits down again."
+    )[:72]
+
+    def _apply_reading_measure(self) -> None:
+        """Cap the plain-text measure at ~72 characters.
+
+        DONE WITH VIEWPORT MARGINS, NOT setTextWidth. The obvious approach
+        is document().setTextWidth(target), and it silently does nothing:
+        QTextEdit re-sets the document width to the viewport width during
+        its own layout pass, so the value is gone by the time anything is
+        painted. Measured while writing this - a 900px pane reported a
+        document width of 884 (the viewport) no matter what was assigned.
+
+        Narrowing the viewport itself is what actually holds, and it keeps
+        the scrollbar and the click-to-select geometry correct, which a
+        document-width hack does not.
+
+        The extra space goes on the RIGHT. Centring the column would leave
+        the message's first character floating in the middle of a wide
+        pane, disconnected from the sender block above it, which is set
+        against the left edge.
+        """
+        if not getattr(self, "_plain_mode", False):
+            self.setViewportMargins(0, 0, 0, 0)
+            return
+        metrics = QFontMetrics(t.make_font("reading"))
+        target = metrics.horizontalAdvance(self._MEASURE_SAMPLE)
+        available = self.viewport().width() + self._right_margin
+        overflow = available - target
+        self._right_margin = max(0, overflow)
+        self.setViewportMargins(0, 0, self._right_margin, 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_reading_measure()
 
     def _on_normalized(self, generation: int, normalized_html: str,
                        image_boxes: dict) -> None:
@@ -611,6 +726,11 @@ class HtmlMailView(QTextBrowser):
         # lands - an email that sets its own background/color still wins
         # over this, only an email that sets neither falls back to it.
         self.setStyleSheet(self._CONTENT_THEME_QSS)
+        # Back to full width: an email's own layout owns the measure from
+        # here, and a capped document width would fight its tables.
+        self._plain_mode = False
+        self._right_margin = 0
+        self.setViewportMargins(0, 0, 0, 0)
         self.setHtml(self._html)
 
     def _on_anchor_clicked(self, url: QUrl) -> None:

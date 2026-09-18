@@ -6,11 +6,11 @@ itself instead.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRectF, Qt, Property
+from PySide6.QtCore import QPropertyAnimation, QRectF, Qt, Property
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QCheckBox
 
-from app.ui import theme as t
+from app.ui import motion, theme as t
 
 _WIDTH = 38
 _HEIGHT = 22
@@ -27,13 +27,25 @@ class Toggle(QCheckBox):
 
         self._anim = QPropertyAnimation(self, b"knobPos", self)
         self._anim.setDuration(t.DURATION_BASE)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # THE APP'S CURVE, not this component's own. It was OutCubic
+        # while the nav pill, the sidebar and every motion.py helper
+        # were OutQuint - so a toggle settled visibly differently from
+        # everything else on the same screen, which is the kind of
+        # difference nobody can name and everybody feels.
+        self._anim.setEasingCurve(motion.curve())
         self.toggled.connect(self._animate_to)
 
     def _animate_to(self, checked: bool) -> None:
+        end = 1.0 if checked else 0.0
         self._anim.stop()
+        # Reduced motion has to reach the knob too: a switch that still
+        # slides when every other transition has been turned off is the
+        # one thing the setting was asked to stop.
+        if not motion.motion_enabled():
+            self._set_knob_pos(end)
+            return
         self._anim.setStartValue(self._knob_pos)
-        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.setEndValue(end)
         self._anim.start()
 
     def _get_knob_pos(self) -> float:

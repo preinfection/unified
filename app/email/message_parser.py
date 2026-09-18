@@ -163,6 +163,9 @@ def _header_fields(msg: Message) -> dict:
         "sender_name": sender_name,
         "sender_email": sender_email,
         "recipients": decode_header_value(msg.get("To", "")),
+        # Captured so a reply to a mailing list goes to the list rather
+        # than to whoever happened to post - see app/email/reply.py.
+        "reply_to": decode_header_value(msg.get("Reply-To", "")),
         "subject": decode_header_value(msg.get("Subject", "")),
         "date_ts": date_ts,
     }

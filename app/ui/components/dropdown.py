@@ -13,10 +13,10 @@ rather than a hand-rolled full-screen backdrop widget.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, Signal
+from PySide6.QtCore import QPoint, QPropertyAnimation, Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from app.ui import theme as t
+from app.ui import motion, theme as t
 from app.ui.svg_icon import simple_icon
 
 _POPUP_MAX_VISIBLE = 8
@@ -62,13 +62,21 @@ class _DropdownPopup(QWidget):
         self.close()
 
     def show_animated(self, target: QPoint) -> None:
+        # A popup that still flies in under reduced motion is the most
+        # noticeable thing the setting failed to reach, because it is
+        # the only widget on screen that moves.
+        if not motion.motion_enabled():
+            self.move(target)
+            self.setWindowOpacity(1.0)
+            self.show()
+            return
         start = QPoint(target.x(), target.y() - 8)
         self.move(start)
         self.setWindowOpacity(0.0)
         self.show()
         self._pos_anim = QPropertyAnimation(self, b"pos", self)
         self._pos_anim.setDuration(t.DURATION_BASE)
-        self._pos_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._pos_anim.setEasingCurve(motion.curve())
         self._pos_anim.setStartValue(start)
         self._pos_anim.setEndValue(target)
         self._pos_anim.start()

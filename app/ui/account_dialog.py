@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from app.auth import gmail_oauth
 from app.services.account_manager import AccountError, AccountManager
 from app.ui import theme as t
-from app.ui.components.button import AccentButton
+from app.ui.components.primitives import Button, Variant
 from app.ui.components.dropdown import Dropdown
 from app.ui.components.section_header import DialogHeading, SectionHeader
 from app.ui.svg_icon import simple_icon
@@ -113,7 +113,7 @@ class AccountDialog(QDialog):
         type_row = QHBoxLayout()
         type_label = QLabel("Account type")
         type_label.setFont(t.make_font("field_label"))
-        type_label.setStyleSheet(f"color: {t.TEXT_TERTIARY};")
+        t.role(type_label, "tertiary")
         type_label.setFixedWidth(90)
         type_row.addWidget(type_label)
         self.type_dropdown = Dropdown(
@@ -138,7 +138,7 @@ class AccountDialog(QDialog):
         self.cancel_btn = self.buttons.addButton(
             "Cancel", QDialogButtonBox.ButtonRole.RejectRole
         )
-        self.ok_btn = AccentButton(" Add Account")
+        self.ok_btn = Button(" Add Account", Variant.PRIMARY)
         self.ok_btn.setIcon(simple_icon("check", 13, t.TEXT_ON_ACCENT))
         self.buttons.addButton(self.ok_btn, QDialogButtonBox.ButtonRole.AcceptRole)
         self.buttons.accepted.connect(self._on_add)
