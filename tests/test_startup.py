@@ -320,3 +320,86 @@ def test_a_normal_handover_is_not_reported_as_cancelled(qapp, instant):
     win.finish(lambda: None)
     qapp.processEvents()
     assert not win.was_cancelled()
+
+
+# ------------------------------- the timing that actually reaches users
+
+def _run_for(ms: int) -> None:
+    """Let real animation time pass."""
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+def test_stages_arriving_after_the_animation_finishes(qapp):
+    """THE BUG THAT STOPPED THE APP OPENING ON A REAL MAILBOX.
+
+    advance_to() built a fresh QPropertyAnimation per call and started it
+    with DeleteWhenStopped while keeping a reference. DeleteWhenStopped
+    destroys the C++ object when the animation COMPLETES, so the reference
+    dangled and the next stage called .stop() on it - "Internal C++ object
+    already deleted", raised inside a signal handler, leaving the opening
+    window on screen forever at "Preparing mailbox".
+
+    It never reproduced in testing because every other test either uses
+    reduced motion or steps stages faster than the 900ms animation, so it
+    was always still alive. A five-second mailbox decrypt is what let the
+    first animation finish before the second stage arrived. This test
+    waits past the animation on purpose.
+    """
+    motion.set_motion_enabled(True)
+    win = StartupWindow()
+    win.show()
+
+    stages = list(StartupWindow.STAGE_PROGRESS)
+    win.set_stage(stages[0])
+    # Longer than DURATION_REVEAL: the animation completes and, under the
+    # old code, deleted itself out from under the next call.
+    _run_for(1100)
+    win.set_stage(stages[1])          # this used to raise
+    _run_for(1100)
+    win.set_stage(stages[2])
+    _run_for(1100)
+    win.set_stage(stages[3])
+    _run_for(1100)                    # let the last one actually travel
+
+    assert float(win.bar.progress) == pytest.approx(0.86, abs=0.02)
+
+    done = []
+    win.finish(lambda: done.append(True))
+    _run_for(800)
+    assert done == [True], "the shell would never have been revealed"
+
+
+def test_a_slow_startup_still_hands_over(qapp):
+    """The same shape end to end: every stage separated by more than the
+    animation it starts."""
+    motion.set_motion_enabled(True)
+    bar = OpeningBar(200)
+    for target in (0.12, 0.38, 0.64, 0.86):
+        bar.advance_to(target)
+        _run_for(950)
+    done = []
+    bar.finish(lambda: done.append(True))
+    _run_for(600)
+    assert done == [True]
+    assert float(bar.progress) == 1.0
+
+
+def test_the_handover_fires_once_and_not_for_stage_changes(qapp):
+    """A stage transition completing must never invoke a handover nobody
+    asked for - that would tear the opening layer away mid-startup."""
+    motion.set_motion_enabled(True)
+    bar = OpeningBar(200)
+    done = []
+    bar.advance_to(0.4)
+    _run_for(950)                     # a stage animation completes
+    assert done == [], "a stage completion triggered the handover"
+
+    bar.finish(lambda: done.append(True))
+    _run_for(600)
+    assert done == [True]
+    _run_for(300)
+    assert done == [True], "the handover fired more than once"

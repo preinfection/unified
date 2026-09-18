@@ -83,9 +83,36 @@ class OpeningBar(QWidget):
         self.setFixedHeight(BAR_HEIGHT)
         self.setFixedWidth(width)
         self._progress = 0.0
-        self._anim: QPropertyAnimation | None = None
         self._shown = QElapsedTimer()
         self._shown.start()
+
+        # ONE ANIMATION, REUSED, AND NOT DeleteWhenStopped.
+        #
+        # This is the bug that stopped the app opening on a real mailbox.
+        # Each call used to build a fresh QPropertyAnimation and start it
+        # with DeleteWhenStopped while keeping a reference in self._anim.
+        # DeleteWhenStopped destroys the C++ object the moment the
+        # animation COMPLETES, leaving that reference dangling - so the
+        # next stage called .stop() on it and died with "Internal C++
+        # object already deleted", inside a signal handler, which left the
+        # opening window on screen forever at "Preparing mailbox".
+        #
+        # It only reproduced with a real cache. The stage animation runs
+        # for 900ms, so it is still alive if the next stage arrives sooner
+        # - which it always does on an empty test database. A five-second
+        # decrypt is what made the first animation finish before the
+        # second stage arrived.
+        #
+        # A single long-lived animation parented to this widget has no such
+        # window: it dies with the bar and never with a stop(). The same
+        # shape nav_pill.py and toggle.py already use.
+        self._anim = QPropertyAnimation(self, b"progress", self)
+        self._anim.setEasingCurve(motion.curve())
+        self._anim.finished.connect(self._on_anim_finished)
+        # Set only by finish(), so a completion callback can never be
+        # attached twice or fire for a stage transition.
+        self._pending_done = None
+        self._finishing = False
 
     # ------------------------------------------------------------ progress
 
@@ -100,23 +127,33 @@ class OpeningBar(QWidget):
 
     progress = Property(float, _get_progress, _set_progress)
 
+    def _on_anim_finished(self) -> None:
+        """Run whatever finish() was waiting for, exactly once.
+
+        One permanent connection dispatching to a stored callback, rather
+        than connecting on_done to a per-call animation: there is no second
+        connection to leak, and a stage transition completing can never
+        invoke a handover that was never requested.
+        """
+        callback, self._pending_done = self._pending_done, None
+        if callback is not None:
+            callback()
+
     def advance_to(self, fraction: float, *, duration: int = DURATION_REVEAL) -> None:
         """Ease toward a checkpoint this stage has genuinely earned."""
+        if self._finishing:
+            return  # the run to 1.0 owns the bar; a late stage cannot interrupt it
         fraction = max(0.0, min(1.0, float(fraction)))
         if fraction <= self._progress:
             return
-        if self._anim is not None:
-            self._anim.stop()
+        self._anim.stop()
         if not motion.motion_enabled():
             self._set_progress(fraction)
             return
-        anim = QPropertyAnimation(self, b"progress", self)
-        anim.setDuration(duration)
-        anim.setEasingCurve(motion.curve())
-        anim.setStartValue(self._progress)
-        anim.setEndValue(fraction)
-        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
-        self._anim = anim
+        self._anim.setDuration(duration)
+        self._anim.setStartValue(self._progress)
+        self._anim.setEndValue(fraction)
+        self._anim.start()
 
     def finish(self, on_done) -> None:
         """Run the fill to 1.0, then hand back.
@@ -126,32 +163,30 @@ class OpeningBar(QWidget):
         the fast-start and reduced-motion paths - a startup sequence whose
         completion callback can be skipped is a window that never opens.
         """
+        self._finishing = True
         too_fast = self._shown.elapsed() < _MIN_VISIBLE_MS
         if too_fast or not motion.motion_enabled():
+            self._anim.stop()
             self._set_progress(1.0)
             on_done()
             return
 
-        if self._anim is not None:
-            self._anim.stop()
-        anim = QPropertyAnimation(self, b"progress", self)
+        self._anim.stop()
+        self._pending_done = on_done
         # Faster than the stage travel: the work is done, and the only
         # thing left is to say so.
-        anim.setDuration(t.DURATION_BASE)
-        anim.setEasingCurve(motion.curve())
-        anim.setStartValue(self._progress)
-        anim.setEndValue(1.0)
-        anim.finished.connect(on_done)
-        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
-        self._anim = anim
+        self._anim.setDuration(t.DURATION_BASE)
+        self._anim.setStartValue(self._progress)
+        self._anim.setEndValue(1.0)
+        self._anim.start()
 
     def stop(self) -> None:
         """Halt wherever it is. For the failure path: a bar that keeps
         advancing while an error dialog explains that startup failed is
         the interface contradicting itself."""
-        if self._anim is not None:
-            self._anim.stop()
-            self._anim = None
+        self._finishing = True
+        self._pending_done = None
+        self._anim.stop()
 
     # --------------------------------------------------------------- paint
 
