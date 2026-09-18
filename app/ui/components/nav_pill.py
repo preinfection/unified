@@ -102,9 +102,20 @@ class NavPill(QPushButton):
         painting afterwards because a 3px bar at the very edge never
         overlapped the text - a full-bleed fill does.
         """
-        strength = self._indicator
-        if self._hovered and not self.isChecked():
-            strength = max(strength, _HOVER_STRENGTH)
+        # SELECTION IS NO LONGER PAINTED HERE. The selected surface is one
+        # indicator owned by the sidebar, which SLIDES between items - see
+        # SidebarWidget._indicator_rect. Each pill fading its own fill
+        # meant moving from Inbox to Sent was a cross-dissolve with both
+        # half-lit for 180ms, which reads as mush rather than as movement.
+        #
+        # What stays here is hover, because hover belongs to the item the
+        # pointer is actually over and there can only be one of those.
+        # `_indicator` stays too: it is what the sidebar reads to find
+        # which pill the shared indicator should be sitting on, and the
+        # design-system test drives it directly.
+        strength = _HOVER_STRENGTH if (
+            self._hovered and not self.isChecked()
+        ) else 0.0
 
         if strength > 0.001:
             painter = QPainter(self)

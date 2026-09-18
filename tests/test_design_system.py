@@ -229,35 +229,69 @@ def test_semantic_colors_are_distinguishable_from_each_other():
 
 # ------------------------------------------------- 4. no edge stripes left
 
-def test_nav_pill_selects_with_a_surface_and_not_a_left_stripe(qapp):
+def test_nav_selects_with_a_surface_and_not_a_left_stripe(qapp):
     """The banned pattern, asserted on real pixels.
 
-    A selected item must NOT paint the accent at its left edge, and MUST
-    lighten across its whole width. Both halves matter: the first forbids
-    the stripe coming back, the second stops the fix being "paint nothing".
+    A selected destination must NOT paint the accent at its left edge, and
+    MUST lighten across its whole width. Both halves matter: the first
+    forbids the stripe coming back, the second stops the fix being "paint
+    nothing".
+
+    ASSERTED ON THE SIDEBAR, NOT ON A LONE PILL. The selected surface used
+    to be painted by each NavPill into itself, so this test could grab one
+    in isolation. It is now a single indicator owned by the drawer that
+    SLIDES between destinations (see SidebarWidget._move_indicator), which
+    is what stopped a folder change being a cross-dissolve with two items
+    half-lit at once. The rule is unchanged and so is what this guards -
+    only the widget that does the painting moved, so the grab moved with
+    it.
     """
-    from app.ui.components.nav_pill import NavPill
+    from app.ui.components.sidebar import SidebarWidget
 
-    pill = NavPill("  Unified Inbox")
-    pill.resize(200, t.TAB_HEIGHT)
-    pill.show()
-    mid_y = t.TAB_HEIGHT // 2
+    sidebar = SidebarWidget()
+    sidebar.resize(t.SIDEBAR_WIDTH, 620)
+    sidebar.show()
+    qapp.processEvents()
+    sidebar._nav_buttons["inbox"].setChecked(True)
+    sidebar._move_indicator(animate=False)      # assert the end state
+    qapp.processEvents()
 
-    before = pill.grab().toImage().pixelColor(120, mid_y)
+    image = sidebar.grab().toImage()
+    selected = sidebar._nav_buttons["inbox"].geometry()
+    unselected = sidebar._nav_buttons["trash"].geometry()
+    mid_y = selected.center().y()
 
-    pill.setChecked(True)
-    pill._set_indicator(1.0)  # skip the animation; assert the end state
-    image = pill.grab().toImage()
-
-    left_edge = image.pixelColor(1, mid_y)
+    left_edge = image.pixelColor(selected.left() + 1, mid_y)
     assert left_edge.name().lower() != t.ACCENT.lower(), (
-        "the accent side-stripe is back on the nav pill"
+        "the accent side-stripe is back on the nav"
     )
-    after = image.pixelColor(120, mid_y)
-    assert after.lightness() > before.lightness(), (
+
+    on = image.pixelColor(selected.center().x(), mid_y)
+    off = image.pixelColor(unselected.center().x(), unselected.center().y())
+    assert on.lightness() > off.lightness(), (
         "selecting a nav item no longer changes its surface"
     )
-    assert after.name().lower() == t.BG_SELECTED.lower()
+    assert on.name().lower() == t.BG_SELECTED.lower()
+    sidebar.close()
+
+
+def test_only_one_destination_is_ever_selected(qapp):
+    """A QButtonGroup enforces exclusivity itself, so unchecking its
+    members one by one does not clear it - it just re-checks the last one.
+    Selecting an ACCOUNT therefore left "Unified Inbox" highlighted too,
+    and the drawer showed two selections at once."""
+    from app.ui.components.sidebar import SidebarWidget
+
+    sidebar = SidebarWidget()
+    sidebar.set_accounts([{"id": 1, "email": "a@b.c", "provider": "gmail"}], {1: 0})
+    sidebar.show()
+    qapp.processEvents()
+
+    sidebar._on_account_clicked(1)
+    qapp.processEvents()
+    checked = [v for v, b in sidebar._nav_buttons.items() if b.isChecked()]
+    assert not checked, f"a folder is still selected alongside an account: {checked}"
+    sidebar.close()
 
 
 def test_the_toast_has_no_stripe_token_left():

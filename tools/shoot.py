@@ -179,6 +179,14 @@ def main() -> int:
         win.resize(1440, 900)
         app.processEvents()
 
+        # 2b. scrolled, so the softened scroll boundaries are visible
+        _bar = win.email_list.verticalScrollBar()
+        _bar.setValue(_bar.maximum() // 2)
+        app.processEvents()
+        shoot("shell-scrolled", win)
+        _bar.setValue(_bar.minimum())
+        app.processEvents()
+
         # 3. collapsed sidebar (no animation - a shot wants the end state)
         win.sidebar.set_collapsed(True, animate=False)
         app.processEvents()

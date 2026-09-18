@@ -55,13 +55,16 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import QEvent, QModelIndex, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QEvent, QModelIndex, QPoint, QRect, QRectF, QSize, Qt, Property, Signal,
+)
 from PySide6.QtCore import QAbstractListModel
 from PySide6.QtGui import QFontMetrics, QPainter
 from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from app.ui import theme as t
 from app.ui.components.avatar import paint_avatar
+from app.ui.components.primitives import paint_edge_fade
 from app.ui.svg_icon import tinted_pixmap
 
 ROLE_MSG = Qt.ItemDataRole.UserRole
@@ -205,6 +208,15 @@ class EmailRowDelegate(QStyledItemDelegate):
             return super().paint(painter, option, index)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # The reveal offset is applied HERE rather than on the view: the
+        # delegate is handed the painter that actually draws a row, so a
+        # translate is one line and costs nothing, whereas nudging the
+        # QListView itself would be undone by the splitter on the next
+        # layout pass. See motion.reveal for why the rise is opt-in.
+        view = self.parent()
+        offset = getattr(view, "_reveal_offset", 0.0)
+        if offset:
+            painter.translate(0.0, offset)
         if msg.get("is_header"):
             self._paint_header(painter, option, msg["label"])
         else:
@@ -469,6 +481,22 @@ class EmailListView(QListView):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
         self.selectionModel().selectionChanged.connect(self._on_selection_changed)
+        self._reveal_offset = 0.0
+
+    # -------------------------------------------------------------- reveal
+
+    def _get_reveal_offset(self) -> float:
+        return self._reveal_offset
+
+    def _set_reveal_offset(self, value: float) -> None:
+        self._reveal_offset = float(value)
+        self.viewport().update()
+
+    # Declared so motion.reveal() can find it - see the note there about
+    # why the rise is opt-in. The list shifts its OWN painting rather than
+    # being moved, because a QListView is owned by a splitter and moving
+    # it would simply be undone on the next layout pass.
+    revealOffset = Property(float, _get_reveal_offset, _set_reveal_offset)
 
     # ------------------------------------------------------------- density
 
@@ -575,3 +603,50 @@ class EmailListView(QListView):
         msg = index.data(ROLE_MSG)
         if msg and not msg.get("is_header"):
             self.context_menu_requested.emit(msg["id"], self.viewport().mapToGlobal(pos))
+
+    # ---------------------------------------------------------------- paint
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """Rows, then a softened boundary at whichever edge is scrolled.
+
+        THE EDGE FADE IS THE POINT. A message list that ends in a hard
+        horizontal cut against the toolbar reads as guillotined - the row
+        at the boundary is visibly sliced, and nothing says the list
+        continues. Softening those two edges is the single cheapest thing
+        that makes a scrolling surface feel finished. Adapted from Magic
+        UI's ProgressiveBlur; see primitives.paint_edge_fade for why the
+        blur itself is not reproduced.
+
+        Painted only where it means something: the top fade appears once
+        there is content scrolled above, the bottom once there is content
+        below. A list that fits entirely on screen has neither, because
+        nothing is being cut off and a permanent vignette would just be
+        decoration.
+        """
+        super().paintEvent(event)
+
+        bar = self.verticalScrollBar()
+        at_top = bar.value() <= bar.minimum()
+        at_bottom = bar.value() >= bar.maximum()
+        if at_top and at_bottom:
+            return  # everything fits; nothing is being cut off
+
+        painter = QPainter(self.viewport())
+        paint_edge_fade(
+            painter, self.viewport().rect(), t.BG_APP,
+            top=not at_top, bottom=not at_bottom,
+        )
+        painter.end()
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:  # noqa: N802
+        """Repaint the whole viewport while scrolling.
+
+        QListView scrolls by blitting the unchanged region and repainting
+        only the newly exposed strip, which is exactly right for rows and
+        exactly wrong for a gradient pinned to the viewport edge: the
+        blitted pixels carry the old fade with them and it smears down the
+        list. Cheap to avoid - the viewport is a few hundred rows tall at
+        most, and this is the one widget where correctness beats the blit.
+        """
+        super().scrollContentsBy(dx, dy)
+        self.viewport().update()

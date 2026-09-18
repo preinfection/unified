@@ -503,3 +503,54 @@ class ClampedLabel(QLabel):
             kept = kept[:-1]
         super().setText(kept.rstrip() + "…")
         self.setToolTip(self._full)
+
+
+# ---------------------------------------------------------------- edges
+
+# How far the softening reaches. Short enough that it never eats a whole
+# row - it is a boundary treatment, not a vignette.
+EDGE_FADE = 28
+
+
+def paint_edge_fade(painter, rect, colour, *, top: bool = False,
+                    bottom: bool = False, height: int = EDGE_FADE) -> None:
+    """Soften where scrolling content meets the chrome.
+
+    ADAPTED FROM MAGIC UI'S ProgressiveBlur. That component stacks eight
+    backdrop-blur layers behind gradient masks so content dissolves into
+    the edge instead of being cut by it. The blur is not the idea - the
+    SOFT BOUNDARY is. What the eye reads is "this continues past here",
+    where a hard edge reads as "this was chopped".
+
+    Qt gets the same impression for almost nothing: a vertical gradient
+    from the surface colour to fully transparent, painted OVER the
+    content at the boundary. No blur, no backdrop sampling, no extra
+    layers - one gradient fill per edge per paint, and only on the few
+    pixels the fade covers.
+
+    The colour must be the surface the content scrolls UNDER, or the fade
+    resolves to the wrong shade and reads as a smudge. Both themes work
+    because it is handed a token rather than a fixed value.
+    """
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QLinearGradient
+
+    solid = QColor(colour)
+    clear = QColor(colour)
+    clear.setAlpha(0)
+
+    if top:
+        band = QRectF(rect.left(), rect.top(), rect.width(), height)
+        grad = QLinearGradient(band.topLeft(), band.bottomLeft())
+        grad.setColorAt(0.0, solid)
+        grad.setColorAt(1.0, clear)
+        painter.fillRect(band, grad)
+
+    if bottom:
+        band = QRectF(
+            rect.left(), rect.bottom() - height + 1, rect.width(), height
+        )
+        grad = QLinearGradient(band.bottomLeft(), band.topLeft())
+        grad.setColorAt(0.0, solid)
+        grad.setColorAt(1.0, clear)
+        painter.fillRect(band, grad)

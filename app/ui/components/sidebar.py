@@ -35,7 +35,10 @@ where it is not pretending to be part of anything.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Property, QPropertyAnimation, QSize, Qt, Signal
+from PySide6.QtCore import (
+    Property, QPropertyAnimation, QRectF, QSize, Qt, Signal,
+)
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -92,6 +95,11 @@ class SidebarWidget(QWidget):
         self._collapsed = False
         self._inbox_unread = 0
         self._nav_labels: dict[str, str] = {}
+        # The shared selection surface: one rounded rect that travels
+        # between destinations instead of each pill fading its own.
+        self._indicator = QRectF()
+        self._indicator_opacity = 0.0
+        self._indicator_anim: QPropertyAnimation | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(t.SPACE_SM, t.SPACE_MD, t.SPACE_SM, t.SPACE_MD)
@@ -232,6 +240,108 @@ class SidebarWidget(QWidget):
         self._trailing_stretch = row.count() - 1
         return bar
 
+    # ------------------------------------------------------------ indicator
+
+    def _get_indicator_rect(self) -> QRectF:
+        return self._indicator
+
+    def _set_indicator_rect(self, rect: QRectF) -> None:
+        self._indicator = rect
+        self.update()
+
+    indicatorRect = Property(QRectF, _get_indicator_rect, _set_indicator_rect)
+
+    def _get_indicator_opacity(self) -> float:
+        return self._indicator_opacity
+
+    def _set_indicator_opacity(self, value: float) -> None:
+        self._indicator_opacity = float(value)
+        self.update()
+
+    indicatorOpacity = Property(
+        float, _get_indicator_opacity, _set_indicator_opacity
+    )
+
+    def _selected_pill(self):
+        for button in self._nav_buttons.values():
+            if button.isChecked():
+                return button
+        return None
+
+    def _move_indicator(self, *, animate: bool = True) -> None:
+        """Send the selection surface to whichever destination is current.
+
+        ADAPTED FROM MAGIC UI'S DOCK, and specifically NOT its
+        magnification. What makes that component feel alive is that the
+        whole dock responds as ONE object - every icon's size is derived
+        continuously from a single mouseX rather than each one toggling
+        its own hover state. Resizing icons would be wrong here (a
+        vertical nav would reflow, and a mail client is not a launcher),
+        but the "one object, one response" half transfers exactly.
+
+        Before this, each pill tweened its own fill, so moving from Inbox
+        to Sent was a cross-dissolve: the old one at 50% and the new one
+        at 50% simultaneously for 180ms, which reads as two things
+        half-happening rather than one thing moving. One rect that
+        travels is unambiguous, and it is also cheaper - one animation
+        instead of two.
+        """
+        target = self._selected_pill()
+        if target is None:
+            # An account is selected instead, so no folder is. The surface
+            # fades out where it stands rather than jumping to a corner.
+            if self._indicator_opacity:
+                motion.animate_property(
+                    self, "indicatorOpacity", 0.0, duration=t.DURATION_FAST
+                )
+            return
+
+        rect = QRectF(target.geometry())
+        if self._indicator.isNull() or not animate or not motion.motion_enabled():
+            self._set_indicator_rect(rect)
+            self._set_indicator_opacity(1.0)
+            return
+
+        if self._indicator_anim is not None:
+            self._indicator_anim.stop()
+        anim = QPropertyAnimation(self, b"indicatorRect", self)
+        anim.setDuration(t.DURATION_BASE)
+        anim.setEasingCurve(motion.curve())
+        anim.setStartValue(self._indicator)
+        anim.setEndValue(rect)
+        anim.start(QPropertyAnimation.DeletionPolicy.KeepWhenStopped)
+        self._indicator_anim = anim
+        if self._indicator_opacity < 1.0:
+            motion.animate_property(self, "indicatorOpacity", 1.0)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """The selection surface, painted behind every child.
+
+        The pills are transparent, so a rect drawn by the parent shows
+        through underneath their icon and label - which is what lets one
+        surface serve all of them.
+        """
+        super().paintEvent(event)
+        if self._indicator.isNull() or self._indicator_opacity <= 0.001:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        fill = QColor(t.BG_SELECTED)
+        fill.setAlphaF(min(1.0, self._indicator_opacity))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(
+            self._indicator.adjusted(0.5, 0.5, -0.5, -0.5),
+            float(t.RADIUS_MD), float(t.RADIUS_MD),
+        )
+        painter.end()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # Geometry changed under it (collapse, window resize); the surface
+        # has to follow without narrating the move.
+        self._move_indicator(animate=False)
+
     # ------------------------------------------------------------- collapse
 
     def is_collapsed(self) -> bool:
@@ -321,14 +431,38 @@ class SidebarWidget(QWidget):
 
         # Restate the count in whichever form now fits.
         self.set_inbox_count(self._inbox_unread)
+        # The pills just changed width; the surface has to be where they
+        # are, and without narrating a move the user did not ask for.
+        self._move_indicator(animate=False)
 
     # ------------------------------------------------------------------ nav
+
+    def _clear_nav_selection(self) -> None:
+        """Uncheck every folder, which needs the GROUP to stand down.
+
+        THIS WAS A REAL BUG, and the shared indicator is what exposed it.
+        Unchecking the buttons individually - setAutoExclusive(False),
+        setChecked(False), setAutoExclusive(True) - does not defeat a
+        QButtonGroup, which enforces exclusivity on its own and simply
+        re-checks the last member. So selecting an ACCOUNT left "Unified
+        Inbox" checked underneath it, and the drawer showed two things
+        selected at once: a highlighted folder and a highlighted account.
+
+        It was easy to miss while every pill painted its own fill, because
+        a second highlight two hundred pixels up reads as background. One
+        travelling surface cannot be in two places, so it had to be fixed.
+        """
+        self._nav_group.setExclusive(False)
+        for btn in self._nav_buttons.values():
+            btn.setChecked(False)
+        self._nav_group.setExclusive(True)
 
     def _on_nav_clicked(self, view: str) -> None:
         self._current_view = view
         self._current_account_id = None
         for item in self._account_items.values():
             item.set_selected(False)
+        self._move_indicator()
         self.view_selected.emit(view)
 
     def set_inbox_count(self, total_unread: int) -> None:
@@ -391,10 +525,8 @@ class SidebarWidget(QWidget):
         self._current_account_id = account_id
         for aid, item in self._account_items.items():
             item.set_selected(aid == account_id)
-        for btn in self._nav_buttons.values():
-            btn.setAutoExclusive(False)
-            btn.setChecked(False)
-            btn.setAutoExclusive(True)
+        self._clear_nav_selection()
+        self._move_indicator()
         self.account_selected.emit(account_id)
 
     # -------------------------------------------------------------- external
@@ -408,9 +540,7 @@ class SidebarWidget(QWidget):
         if view is not None and view in self._nav_buttons:
             self._nav_buttons[view].setChecked(True)
         else:
-            for btn in self._nav_buttons.values():
-                btn.setAutoExclusive(False)
-                btn.setChecked(False)
-                btn.setAutoExclusive(True)
+            self._clear_nav_selection()
         for aid, item in self._account_items.items():
             item.set_selected(aid == account_id)
+        self._move_indicator()

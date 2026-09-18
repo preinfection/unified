@@ -63,6 +63,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QImage, QPaint
 from PySide6.QtWidgets import QTextBrowser
 
 from app.ui import theme as t
+from app.ui.components.primitives import paint_edge_fade
 
 log = logging.getLogger(__name__)
 
@@ -852,3 +853,50 @@ class HtmlMailView(QTextBrowser):
         pos = bar.value()
         self.document().markContentsDirty(0, self.document().characterCount())
         bar.setValue(pos)
+
+    # ---------------------------------------------------------------- edges
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """The message, with its scroll boundaries softened.
+
+        The same treatment the message list gets, for the same reason and
+        from the same source (Magic UI's ProgressiveBlur, minus the blur -
+        see primitives.paint_edge_fade). A long email currently ends in a
+        hard horizontal cut against the action row above it and the pane
+        edge below, which slices a line of the sender's prose in half. On
+        the one surface this product exists to be good at, that is the
+        wrong last impression.
+
+        THE COLOUR IS NOT ALWAYS THE APP FLOOR. Real HTML mail brings its
+        own background - this widget deliberately does not override it -
+        so fading to BG_APP over a white newsletter would paint two grey
+        bars across it. The fade uses whatever this widget is actually
+        painted on, and simply does not run when the message supplied its
+        own colour.
+        """
+        super().paintEvent(event)
+
+        if not getattr(self, "_plain_mode", False):
+            # An email's own design is in charge; anything drawn over it
+            # would be this app editing someone's message.
+            return
+
+        bar = self.verticalScrollBar()
+        at_top = bar.value() <= bar.minimum()
+        at_bottom = bar.value() >= bar.maximum()
+        if at_top and at_bottom:
+            return
+
+        painter = QPainter(self.viewport())
+        paint_edge_fade(
+            painter, self.viewport().rect(), t.BG_APP,
+            top=not at_top, bottom=not at_bottom,
+        )
+        painter.end()
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:  # noqa: N802
+        """Repaint the viewport while scrolling, so the pinned gradient
+        does not get blitted down the page - see the matching note in
+        EmailListView."""
+        super().scrollContentsBy(dx, dy)
+        self.viewport().update()

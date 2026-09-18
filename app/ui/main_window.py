@@ -686,6 +686,7 @@ class MainWindow(QMainWindow):
         self.current_account_id = None
         self._update_search_placeholder()
         self.reload_email_list()
+        self._reveal_list()
 
     def _on_account_selected(self, account_id: int) -> None:
         self._extra_limit = 0
@@ -693,6 +694,24 @@ class MainWindow(QMainWindow):
         self.current_account_id = account_id
         self._update_search_placeholder()
         self.reload_email_list()
+        self._reveal_list()
+
+    def _reveal_list(self) -> None:
+        """Let the list arrive when the user changed WHERE THEY ARE.
+
+        Adapted from Magic UI's BlurFade (offset + fade; the blur is
+        dropped - see motion.reveal). The point is that switching folder
+        or account is a change of context, and content that simply
+        replaces itself in place gives the eye nothing to tell it the
+        ground moved.
+
+        DELIBERATELY NOT CALLED FROM reload_email_list(). That runs on
+        every debounced sync tick - roughly once a second while any
+        account is syncing - and a list that re-revealed itself that
+        often would be unreadable. It is bound to the two things the user
+        actually did.
+        """
+        motion.reveal(self.email_list)
 
     def _update_search_placeholder(self) -> None:
         """Search always scopes to whatever is currently shown: a single

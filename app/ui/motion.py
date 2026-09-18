@@ -246,3 +246,60 @@ def after(msec: int, fn, parent=None) -> QTimer:
     timer.timeout.connect(fn)
     timer.start(msec)
     return timer
+
+
+def reveal(widget: QWidget, *, offset: int = 6, duration: int | None = None):
+    """Content arriving: a short rise into place, fading as it comes.
+
+    ADAPTED FROM MAGIC UI'S BlurFade, minus the blur. That component
+    animates `y: 6 -> 0`, `opacity: 0 -> 1` and `blur(6px) -> blur(0)`
+    together, and the reason it reads as "materialising" rather than
+    "appearing" is the combination: the offset gives the content
+    somewhere to come FROM, and the fade stops the movement reading as a
+    slide.
+
+    THE BLUR IS DELIBERATELY DROPPED. In a browser it is one compositor
+    property; in Qt it is a QGraphicsBlurEffect re-rasterising the whole
+    widget every frame, which over a full message list is exactly the
+    expense that buys an effect nobody asked for. The offset carries
+    nearly all of the impression and costs nothing.
+
+    THE RISE IS OPT-IN, because Qt has no general way to nudge a widget
+    that a layout owns - moving it just fights the layout on the next
+    resize. A widget that wants the offset declares a `revealOffset` Qt
+    property and shifts its OWN painting by it (see
+    EmailListView.revealOffset); everything else gets the fade alone,
+    which is still correct, just quieter.
+
+    Used where content changes CONTEXT - a different folder, a different
+    message - and never for routine repaints. A list that re-revealed
+    itself on every sync tick would be unreadable.
+    """
+    if duration is None:
+        duration = t.DURATION_BASE
+
+    widget.setVisible(True)
+    has_offset = widget.metaObject().indexOfProperty("revealOffset") >= 0
+
+    if not _ENABLED:
+        _opacity_effect(widget).setOpacity(1.0)
+        if has_offset:
+            widget.setProperty("revealOffset", 0.0)
+        return None
+
+    effect = _opacity_effect(widget)
+    fade = QPropertyAnimation(effect, b"opacity", widget)
+    fade.setDuration(duration)
+    fade.setEasingCurve(curve())
+    fade.setStartValue(0.0)
+    fade.setEndValue(1.0)
+    fade.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    if has_offset:
+        rise = QPropertyAnimation(widget, b"revealOffset", widget)
+        rise.setDuration(duration)
+        rise.setEasingCurve(curve())
+        rise.setStartValue(float(offset))
+        rise.setEndValue(0.0)
+        rise.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    return fade
