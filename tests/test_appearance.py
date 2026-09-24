@@ -169,6 +169,44 @@ def test_saved_density_is_applied_at_startup(qapp, tmp_path, monkeypatch):
         win.close()
 
 
+# ------------------------------------------------- upgrading from v1.3.0
+
+V130_SETTINGS = {"theme_mode": "system", "motion_mode": "reduced",
+                 "list_density": "compact", "start_maximized": True}
+
+
+def test_reduced_motion_chosen_in_v130_survives_the_upgrade(tmp_path, monkeypatch):
+    """v1.3.0 shares this settings file and said "motion_mode": "reduced"
+    where this line says "reduced_motion": true."""
+    import json
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    path = config.app_data_dir() / "settings.json"
+    path.write_text(json.dumps(V130_SETTINGS), encoding="utf-8")
+    assert config.Settings(path).get("reduced_motion") is True
+    assert config.Settings(path).get("compact_rows") is True
+    assert config.peek_appearance()["reduced_motion"] is True
+    # v1.3.0's own keys stay, so going back to it loses nothing.
+    config.Settings(path).set("sync_interval_minutes", 10)
+    assert json.loads(path.read_text(encoding="utf-8"))["motion_mode"] == "reduced"
+
+
+def test_an_explicit_choice_here_beats_the_v130_key(tmp_path):
+    import json
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(dict(V130_SETTINGS, reduced_motion=False)),
+                    encoding="utf-8")
+    assert config.Settings(path).get("reduced_motion") is False
+    path.write_text(json.dumps(dict(V130_SETTINGS, compact_rows=False)),
+                    encoding="utf-8")
+    assert config.Settings(path).get("compact_rows") is False
+    path.write_text(json.dumps({"motion_mode": "full", "list_density": "cozy"}),
+                    encoding="utf-8")
+    assert config.Settings(path).get("reduced_motion") is False
+    assert config.Settings(path).get("compact_rows") is False
+
+
 # --------------------------------------------------------------- shortcuts
 
 def test_every_binding_has_a_handler(window):

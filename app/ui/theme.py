@@ -315,6 +315,28 @@ def is_dark() -> bool:
     return MODE == "dark"
 
 
+def resolve_mode(stored) -> str:
+    """The palette to bind for a stored theme_mode value.
+
+    "dark" and "light" are themselves. "system" is what v1.3.0 saved for
+    "Match Windows": this line has no live follow, so it resolves at each
+    start to whatever the system is showing then (dark when Qt cannot
+    tell), and the stored value is left alone until the user picks a theme.
+    Anything else falls back to dark, the default.
+    """
+    mode = str(stored or "dark")
+    if mode in MODES:
+        return mode
+    if mode == "system":
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+
+        app = QGuiApplication.instance()
+        if app is not None and app.styleHints().colorScheme() == Qt.ColorScheme.Light:
+            return "light"
+    return "dark"
+
+
 # =========================================================================
 # SPACING
 # =========================================================================

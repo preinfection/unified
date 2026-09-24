@@ -114,9 +114,15 @@ def test_it_settles_back_when_the_pointer_leaves(dock):
     dock._pointer_at(dock.item("starred").x() + 10)
     settle(400)
     dock.leaveEvent(QEvent(QEvent.Type.Leave))
-    settle(500)
+    # Waits for the settle rather than a fixed time: each tick advances
+    # the spring by at most 50ms however long the frame took, so on a
+    # loaded machine the same settle takes longer in wall-clock time.
+    for _ in range(150):
+        settle(20)
+        if not dock.is_settling():
+            break
+    assert not dock.is_settling(), "still moving after 3 seconds"
     assert all(item.size_now == pytest.approx(CELL, abs=0.05) for item in dock.items)
-    assert not dock.is_settling()
 
 
 def test_the_spring_never_overshoots(dock):

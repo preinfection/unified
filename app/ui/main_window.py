@@ -295,10 +295,7 @@ class MainWindow(QMainWindow):
 
         Called once from __init__ and again whenever Settings is saved.
         """
-        mode = str(self.settings.get("theme_mode") or "dark")
-        if mode not in t.MODES:
-            mode = "dark"
-        t.apply_mode(mode)
+        t.apply_mode(t.resolve_mode(self.settings.get("theme_mode")))
         motion.set_motion_enabled(not bool(self.settings.get("reduced_motion")))
 
     def set_theme_mode(self, mode: str, *, origin=None) -> None:
@@ -1545,7 +1542,7 @@ class MainWindow(QMainWindow):
             # Settings, so the window applies whatever is now stored rather
             # than assuming nothing visual changed.
             motion.set_motion_enabled(not bool(self.settings.get("reduced_motion")))
-            self.set_theme_mode(str(self.settings.get("theme_mode") or "dark"))
+            self.set_theme_mode(t.resolve_mode(self.settings.get("theme_mode")))
             self.smooth_pointer.set_enabled(bool(self.settings.get("smooth_pointer")))
             self.email_list.set_compact(bool(self.settings.get("compact_rows")))
             if dialog.accounts_changed:

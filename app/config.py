@@ -55,6 +55,24 @@ def google_client_secrets_path() -> Path:
 _SETTINGS_FILE = "settings.json"
 
 
+def _carry_forward(stored: dict) -> dict:
+    """Read v1.3.0's motion and density choices into this line's keys.
+
+    v1.3.0 (developed in parallel, sharing this settings file) stored
+    "motion_mode": "reduced" and "list_density": "compact" where this line
+    stores "reduced_motion" and "compact_rows". Someone who asked for less
+    motion there must not get full motion here just for upgrading. Only
+    fills gaps: a key this line has written always wins, and v1.3.0's own
+    keys are left in place untouched.
+    """
+    carried = {}
+    if "reduced_motion" not in stored and stored.get("motion_mode") == "reduced":
+        carried["reduced_motion"] = True
+    if "compact_rows" not in stored and stored.get("list_density") == "compact":
+        carried["compact_rows"] = True
+    return dict(stored, **carried) if carried else stored
+
+
 def peek_appearance() -> dict:
     """The theme and motion preference, read before anything else exists.
 
@@ -82,6 +100,7 @@ def peek_appearance() -> dict:
         with open(path, "r", encoding="utf-8") as f:
             stored = json.load(f)
         if isinstance(stored, dict):
+            stored = _carry_forward(stored)
             for key in out:
                 if key in stored:
                     out[key] = stored[key]
@@ -137,7 +156,7 @@ class Settings:
                 with open(self.path, "r", encoding="utf-8") as f:
                     stored = json.load(f)
                 if isinstance(stored, dict):
-                    self._data.update(stored)
+                    self._data.update(_carry_forward(stored))
         except (OSError, json.JSONDecodeError) as e:
             log.warning("Could not load settings (%s); using defaults", e)
 

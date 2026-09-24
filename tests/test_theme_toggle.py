@@ -208,6 +208,35 @@ def test_save_keeps_the_chosen_theme(window):
     assert t.MODE == "light"
 
 
+# ------------------------------------------------- upgrading from v1.3.0
+
+def test_a_stored_system_theme_resolves_to_a_real_palette(qapp):
+    """v1.3.0 saved "system" for Match Windows, and shares this settings
+    file. This line has no live follow, so it binds a real palette."""
+    assert t.resolve_mode("dark") == "dark"
+    assert t.resolve_mode("light") == "light"
+    assert t.resolve_mode(None) == "dark"
+    assert t.resolve_mode("solarized") == "dark"
+    scheme = qapp.styleHints().colorScheme()
+    assert t.resolve_mode("system") == ("light" if scheme == Qt.ColorScheme.Light else "dark")
+
+
+def test_settings_shows_the_theme_on_screen_for_a_stored_system_theme(window):
+    """The toggle read "system" as "not dark", so it showed light over a
+    dark window, and Save then wrote that light."""
+    from app.ui.settings_dialog import SettingsDialog
+
+    motion.set_motion_enabled(False)
+    win, settings = window
+    settings.set("theme_mode", "system")
+    win._apply_appearance_settings()
+    dialog = SettingsDialog(settings, win.manager, win)
+    assert dialog.theme_toggle.mode() == t.MODE
+    dialog._save()
+    assert settings.get("theme_mode") == "system", (
+        "Save turned a theme nobody touched into a choice")
+
+
 # -------------------------------------------------------------- the reveal
 
 def _curtains(win):

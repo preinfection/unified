@@ -46,6 +46,7 @@ _BULLET = re.compile(r"^\s*(?:[-*+]|[•◉●○▪■◦–])\s+(.*)$")
 _NUMBERED = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
 _HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 _RULE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
+_QUOTE = re.compile(r"^\s{0,3}>\s?(.*)$")
 _IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _AUTOLINK = re.compile(r"<(https?://[^>]+)>")
@@ -129,6 +130,11 @@ def render_markdown(md: str, release: Release | None = None) -> str:
             code.append(raw)
             continue
 
+        quote = _QUOTE.match(raw)
+        if quote:
+            # A quoted aside ("Note on ...") reads fine as plain text in
+            # this column; the marker itself must not show.
+            raw = quote.group(1)
         line = raw.rstrip()
         if not line.strip():
             close_paragraph()

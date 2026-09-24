@@ -3,11 +3,11 @@
 ## v1.4.0
 
 > **Note on lineage.** This line was developed from v1.2.1 in parallel
-> with the v1.3.0 redesign that reached `main` on 2026-09-03, and the two
-> overlap heavily in intent. It is not a continuation of v1.3.0 and has
-> not been merged with it. Numbered 1.4.0 only so its installer cannot be
-> confused with, or silently upgrade over, the v1.3.0 build - the two
-> share an installer AppId.
+> with the v1.3.0 redesign that reached `main` on 2026-09-03. The two
+> overlap heavily in intent but are separate designs: v1.4.0 is not built
+> on top of v1.3.0. On 2026-09-24 this line replaced v1.3.0 on `main`;
+> v1.3.0's history and tag are kept. The two share an installer AppId, so
+> installing v1.4.0 upgrades a v1.3.0 install in place.
 
 A product-level redesign of the interface, followed by a production
 polish pass. No change to how mail is fetched, stored, encrypted or
@@ -15,6 +15,23 @@ authenticated: every call into the database, sync, transport and security
 layers behaves as it did in v1.2.1, apart from the two additions noted
 under *Backend* below, both of which exist to support features in this
 release.
+
+### Upgrading from v1.3.0
+
+Your accounts, mail and settings carry over. v1.3.0 did not change the
+database, the encryption key or the sign-in storage, so v1.4.0 opens the
+same files. A few things are different:
+
+- Some v1.3.0 features are not in this line: Mark all as read, the
+  Unread filter in the list header, the third ("relaxed") row density,
+  "Match Windows" for motion, the "Open maximised" setting (this line
+  always opens maximised) and remembering the window's restored size.
+- A theme set to "Match Windows" now picks light or dark from Windows each
+  time Unified starts, rather than following it live. Choosing a theme in
+  Settings replaces it.
+- Reduced motion and compact rows, if you had them on, stay on.
+- v1.3.0's own settings are left in the file, so going back to v1.3.0
+  keeps them.
 
 ### Folders in a dock, accounts in the sidebar
 
@@ -84,7 +101,7 @@ Every animation has a reduced-motion state that is its final state.
 - Closing the window within 400ms of opening could start a sync
   afterwards on threads nothing waited for.
 
-Tests: 412 to 586.
+Tests: 412 to 594.
 
 ### The keyboard works
 

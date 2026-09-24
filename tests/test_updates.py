@@ -499,6 +499,15 @@ def test_release_notes_render_only_a_safe_subset():
     assert "5 &lt; 6 &amp;" in out
 
 
+def test_a_quoted_note_shows_as_text_without_its_markers():
+    from app.ui.components.changelog import render_markdown
+
+    out = render_markdown("> **Note.** One line\n> and the next.\n>\n> - a point\n\nAfter.\n")
+    assert "&gt;" not in out, "a quote marker was drawn as text"
+    assert "<p><b>Note.</b> One line and the next.</p>" in out
+    assert out.count("<li>") == 1 and "<p>After.</p>" in out
+
+
 @pytest.fixture()
 def notes_path(tmp_path):
     return tmp_path / "release_notes.json"

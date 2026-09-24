@@ -75,6 +75,8 @@ This launches Unified directly from the source code.
 | `tools/shoot.py`        | Renders app screens to PNG for design review |
 | `tools/launch_check.py` | Launches the app end to end against a throwaway profile |
 | `tools/startup_check.py` | Steps the opening sequence and prints the bar's real progression |
+| `tools/release_notes.py` | Writes a GitHub release body from `RELEASE_NOTES.md` |
+| `.github/workflows/release.yml` | Tests, builds and launches the Windows app, then publishes the release |
 | `assets/`               | Images and application assets   |
 
 ## Usage

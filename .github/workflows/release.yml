@@ -1,0 +1,192 @@
+# Builds the Windows executable and installer on a real Windows machine,
+# and optionally publishes them as a GitHub release.
+#
+# Run it from the Actions tab (Release > Run workflow). With "publish" off
+# it is a dry run: the files are attached to the run as an artifact only.
+# With it on, it creates the release v<version>, where <version> is
+# app/__init__.py's __version__, and refuses if that release exists.
+#
+# Order matters: the tests run first, then the build, then the built
+# Unified.exe is launched against a throwaway profile. Nothing is
+# published unless all of that passed.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a GitHub release for this version
+        type: boolean
+        default: false
+      title:
+        description: Release title (empty for "Unified v<version>")
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Read version
+        id: version
+        run: |
+          $version = python -c "from app import __version__; print(__version__)"
+          if (-not $version) { throw "Could not read __version__" }
+          $iss = Select-String -Path installer\Unified.iss -Pattern '#define MyAppVersion "(.*)"'
+          $issVersion = $iss.Matches[0].Groups[1].Value
+          if ($issVersion -ne $version) {
+            throw "installer\Unified.iss says $issVersion but app says $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version $version"
+
+      - name: Refuse to overwrite an existing release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view "v${{ steps.version.outputs.version }}" --repo "${{ github.repository }}" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release v${{ steps.version.outputs.version }} already exists"
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q -p no:cacheprovider
+
+      - name: Build executable
+        run: python build.py
+
+      - name: Check the bundle
+        run: |
+          $exe = "dist\Unified\Unified.exe"
+          if (-not (Test-Path $exe)) { throw "$exe was not built" }
+          $gmail = "dist\Unified\_internal\googleapiclient\discovery_cache\documents\gmail.v1.json"
+          if (-not (Test-Path $gmail)) { throw "The Gmail discovery document is missing" }
+          $docs = (Get-ChildItem "dist\Unified\_internal\googleapiclient\discovery_cache\documents").Count
+          if ($docs -ne 1) { throw "Expected only the Gmail discovery document, found $docs" }
+          $icons = (Get-ChildItem "dist\Unified\_internal\assets\icons" -Filter *.svg).Count
+          if ($icons -lt 1) { throw "No SVG icons were bundled" }
+          $size = (Get-ChildItem dist\Unified -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("Bundle: {0:N0} MB, {1} icons" -f $size, $icons)
+
+      - name: Launch the built app
+        run: |
+          $data = Join-Path $env:RUNNER_TEMP "unified-profile"
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          $env:APPDATA = $data
+          $log = Join-Path $data "Unified\logs\app.log"
+          $app = Start-Process -FilePath "dist\Unified\Unified.exe" -PassThru
+          $ready = $false
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Get-Date) -lt $deadline -and -not $app.HasExited) {
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern "Database check passed" -Quiet)) {
+              $ready = $true
+              break
+            }
+            Start-Sleep -Seconds 1
+          }
+          # Let it run a little past ready, so a crash just after the
+          # window opens is still caught.
+          if ($ready) { Start-Sleep -Seconds 8 }
+          if (Test-Path $log) { Get-Content $log }
+          if ($app.HasExited) { throw "Unified.exe exited on its own (code $($app.ExitCode))" }
+          Stop-Process -Id $app.Id -Force
+          if (-not $ready) { throw "Unified.exe did not finish starting within 90 seconds" }
+          if (Select-String -Path $log -Pattern "Traceback|CRITICAL" -Quiet) {
+            throw "The app log contains an error"
+          }
+
+      - name: Build installer
+        run: |
+          function Find-Iscc {
+            Get-ChildItem -Path "${env:ProgramFiles(x86)}", $env:ProgramFiles -Filter ISCC.exe `
+              -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Could not install Inno Setup" }
+            $iscc = Find-Iscc
+          }
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          Write-Host "Using $iscc"
+          & $iscc installer\Unified.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Package
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $zip = "release\Unified-v$version-windows.zip"
+          Push-Location dist
+          7z a -tzip -mx=7 "..\$zip" Unified | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z failed" }
+          Pop-Location
+          $files = @("release\Unified-Setup-v$version.exe", $zip)
+          foreach ($f in $files) { if (-not (Test-Path $f)) { throw "$f is missing" } }
+          $sums = foreach ($f in $files) {
+            $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            "$hash  $(Split-Path $f -Leaf)"
+          }
+          $sums | Set-Content -Encoding ascii release\SHA256SUMS.txt
+          Get-Content release\SHA256SUMS.txt
+          Get-ChildItem release | Format-Table Name, @{n="MB"; e={"{0:N1}" -f ($_.Length / 1MB)}}
+          python tools/release_notes.py $version release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "Could not build the release notes" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Unified-v${{ steps.version.outputs.version }}-windows
+          path: |
+            release/*
+            release-notes.md
+          if-no-files-found: error
+
+      - name: Publish release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Through the environment, never pasted into the script.
+          RELEASE_TITLE: ${{ inputs.title }}
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $title = $env:RELEASE_TITLE
+          if (-not $title) { $title = "Unified v$version" }
+          gh release create "v$version" `
+            "release\Unified-Setup-v$version.exe" `
+            "release\Unified-v$version-windows.zip" `
+            "release\SHA256SUMS.txt" `
+            --repo "${{ github.repository }}" `
+            --target "${{ github.sha }}" `
+            --title "$title" `
+            --notes-file release-notes.md `
+            --latest
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }

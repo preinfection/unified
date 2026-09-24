@@ -79,9 +79,7 @@ def main() -> int:
     # then flip. peek_appearance is a small JSON read with no side
     # effects; Settings still owns these values from here on.
     appearance = config.peek_appearance()
-    mode = str(appearance.get("theme_mode") or "dark")
-    if mode in t.MODES:
-        t.apply_mode(mode)
+    t.apply_mode(t.resolve_mode(appearance.get("theme_mode")))
     motion.set_motion_enabled(not bool(appearance.get("reduced_motion")))
 
     # THE APPLICATION FONT, NOT A STYLESHEET RULE, AND THIS IS LOAD-BEARING.

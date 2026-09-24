@@ -196,7 +196,9 @@ class SettingsDialog(QDialog):
         self.manager = manager
         self.accounts_changed = False
         # What to put back if the dialog is cancelled after a live change.
-        self._theme_on_open = str(settings.get("theme_mode") or "dark")
+        # Resolved, so a stored "system" (v1.3.0) shows the theme actually
+        # on screen rather than whichever side "not dark" lands on.
+        self._theme_on_open = t.resolve_mode(settings.get("theme_mode"))
 
         self.setWindowTitle("Settings")
         self.setMinimumSize(720, 520)
@@ -487,7 +489,8 @@ class SettingsDialog(QDialog):
         self.settings.set("sync_interval_minutes", self.interval_spin.value())
         self.settings.set("notifications_enabled", self.notify_toggle.isChecked())
         self.settings.set("messages_shown", self.shown_spin.value())
-        self.settings.set("theme_mode", self.theme_toggle.mode())
+        if self.theme_toggle.mode() != self._theme_on_open:
+            self.settings.set("theme_mode", self.theme_toggle.mode())
         self.settings.set("compact_rows", bool(self.density_dropdown.value()))
         self.settings.set("reduced_motion", bool(self.motion_toggle.isChecked()))
         self.settings.set("smooth_pointer", bool(self.pointer_toggle.isChecked()))
