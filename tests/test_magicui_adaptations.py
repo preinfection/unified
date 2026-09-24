@@ -4,8 +4,9 @@ Each was studied from the component's actual registry source rather than
 its demo, and each is here because it fixes something that was genuinely
 weak - not because the component existed.
 
-  Dock              -> one selection surface that SLIDES between folders,
-                       instead of every pill cross-fading its own
+  Dock              -> the folders as one magnifying row at the top, and
+                       one selection surface that SLIDES between them
+                       (the magnification itself is in test_dock.py)
   ProgressiveBlur   -> a soft boundary where scrolling content meets the
                        chrome, instead of a hard cut
   BlurFade          -> content arriving on a change of context
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import QApplication
 from app.ui import motion, theme as t
 from app.ui.components.email_list import EmailListView
 from app.ui.components.primitives import EDGE_FADE
-from app.ui.components.sidebar import SidebarWidget
+from app.ui.components.dock import CELL, CELL_PEAK, Dock
 
 
 @pytest.fixture(scope="module")
@@ -60,92 +61,104 @@ def _rows(n: int = 60) -> list[dict]:
 # ------------------------------------------- Dock -> sliding nav surface
 
 @pytest.fixture()
-def sidebar(qapp):
-    bar = SidebarWidget()
-    bar.set_accounts([{"id": 1, "email": "a@b.c", "provider": "gmail"}], {1: 0})
-    bar.resize(t.SIDEBAR_WIDTH, 620)
+def dock(qapp):
+    bar = Dock()
     bar.show()
     qapp.processEvents()
     yield bar
     bar.close()
+    motion.set_motion_enabled(True)
 
 
-def test_the_selection_surface_travels_between_folders(sidebar, qapp):
+def test_the_selection_surface_travels_between_folders(dock, qapp):
     """THE POINT OF THE ADAPTATION. Each pill used to tween its own fill,
     so Inbox -> Sent was a cross-dissolve with both half-lit for 180ms.
-    One surface that moves is unambiguous."""
+    One surface that moves is unambiguous. It moved to the dock with the
+    folders and still travels."""
     motion.set_motion_enabled(True)
-    sidebar._nav_buttons["inbox"].setChecked(True)
-    sidebar._move_indicator(animate=False)
-    start = sidebar._indicator.toRect()
+    dock.set_current_folder("inbox", animate=False)
+    start = dock.selection_rect().toRect()
 
-    sidebar._nav_buttons["trash"].setChecked(True)
-    sidebar._on_nav_clicked("trash")
+    dock.set_current_folder("trash")
     settle(40)
-    midway = sidebar._indicator.toRect()
+    midway = dock.selection_rect().toRect()
     settle(400)
-    end = sidebar._indicator.toRect()
+    end = dock.selection_rect().toRect()
 
-    assert end.y() > start.y(), "the surface never moved"
-    assert end.y() == sidebar._nav_buttons["trash"].geometry().y()
+    trash = dock.cell_rect_in_dock(dock.item("trash")).toRect()
+    assert end.x() > start.x(), "the surface never moved"
+    assert end.x() == trash.x()
     # Caught in flight: it travelled rather than teleporting.
-    assert start.y() < midway.y() < end.y(), (
-        f"the surface jumped ({start.y()} -> {midway.y()} -> {end.y()})"
+    assert start.x() < midway.x() < end.x(), (
+        f"the surface jumped ({start.x()} -> {midway.x()} -> {end.x()})"
     )
 
 
-def test_there_is_only_ever_one_selection_surface(sidebar, qapp):
-    """A pill must not paint its own selected fill any more, or there
-    would be two."""
-    from app.ui.components.nav_pill import NavPill
+def test_there_is_only_ever_one_selection_surface(qapp):
+    """A cell must not paint its own selected fill, or there would be two -
+    the dock paints the one surface that slides."""
+    from app.ui.components.dock import DockItem
 
-    pill = NavPill("  Inbox")
-    pill.resize(200, t.TAB_HEIGHT)
-    pill.setChecked(True)
-    pill._set_indicator(1.0)
-    pill.show()
+    item = DockItem("inbox", "inbox", "Inbox", folder=True)
+    item.resize(CELL + 4, 44)
+    item.setChecked(True)
+    item.show()
     qapp.processEvents()
-    image = pill.grab().toImage()
-    middle = image.pixelColor(120, t.TAB_HEIGHT // 2)
-    assert middle.alpha() == 0 or middle.name().lower() != t.BG_SELECTED.lower(), (
-        "the pill is painting a selected surface of its own"
+    image = item.grab().toImage()
+    cell = item.cell_rect().toRect()
+    corner = image.pixelColor(cell.left() + 3, cell.top() + 3)
+    assert corner.alpha() == 0 or corner.name().lower() != t.BG_SELECTED.lower(), (
+        "the cell is painting a selected surface of its own"
     )
-    pill.close()
+    item.close()
 
 
-def test_selecting_an_account_retires_the_surface(sidebar, qapp):
+def test_choosing_an_account_does_not_retire_the_folder(dock, qapp):
+    """WHAT REPLACED "selecting an account retires the surface".
+
+    In the drawer, a folder and an account were alternatives in one list,
+    so choosing an account had to switch the folder surface off. They are
+    two independent answers now - which folder (dock) and whose (sidebar) -
+    so a scope change leaves the folder surface exactly where it is. The
+    window-level version of this is in test_dock.py."""
     motion.set_motion_enabled(True)
-    sidebar._on_account_clicked(1)
-    settle(400)
-    assert sidebar._indicator_opacity < 0.05
+    dock.set_current_folder("sent", animate=False)
+    before = dock.selection_rect()
+    # A scope change touches the sidebar only; the dock is told the same
+    # folder again.
+    dock.set_current_folder("sent")
+    settle(300)
+    assert dock.selection_rect() == before
+    assert [i.key for i in dock.items if i.isChecked()] == ["sent"]
 
 
-def test_the_surface_lands_immediately_under_reduced_motion(sidebar, qapp):
+def test_the_surface_lands_immediately_under_reduced_motion(dock, qapp):
     motion.set_motion_enabled(False)
-    try:
-        sidebar._nav_buttons["sent"].setChecked(True)
-        sidebar._on_nav_clicked("sent")
-        qapp.processEvents()
-        assert sidebar._indicator.toRect().y() == (
-            sidebar._nav_buttons["sent"].geometry().y()
-        ), "reduced motion left the surface somewhere in between"
-        assert sidebar._indicator_opacity == 1.0
-    finally:
-        motion.set_motion_enabled(True)
-
-
-def test_collapsing_moves_the_surface_without_narrating_it(sidebar, qapp):
-    """The pills change width; the surface has to follow, but the user did
-    not ask to watch it travel."""
-    motion.set_motion_enabled(True)
-    sidebar._nav_buttons["inbox"].setChecked(True)
-    sidebar._move_indicator(animate=False)
-    sidebar.set_collapsed(True, animate=False)
+    dock.set_current_folder("sent")
     qapp.processEvents()
-    assert sidebar._indicator.toRect().width() == (
-        sidebar._nav_buttons["inbox"].geometry().width()
+    sent = dock.cell_rect_in_dock(dock.item("sent"))
+    assert dock.selection_rect() == sent, (
+        "reduced motion left the surface somewhere in between"
     )
-    sidebar.set_collapsed(False, animate=False)
+
+
+def test_magnification_moves_the_surface_without_narrating_it(dock, qapp):
+    """The cells change size under the pointer; the surface has to stay on
+    its cell through that, not lag behind it or animate to catch up. (This
+    was "collapsing moves the surface" when the pills changed width with
+    the drawer - same guarantee, new cause.)"""
+    motion.set_motion_enabled(True)
+    dock.set_current_folder("inbox", animate=False)
+    inbox = dock.item("inbox")
+    dock._pointer_at(inbox.x() + inbox.width() / 2)
+    settle(500)
+    assert inbox.size_now == pytest.approx(CELL_PEAK, abs=0.2)
+    assert dock.selection_rect() == dock.cell_rect_in_dock(inbox)
+    dock._pointer_x = None
+    dock._retarget()
+    settle(500)
+    assert inbox.size_now == pytest.approx(CELL, abs=0.2)
+    assert dock.selection_rect() == dock.cell_rect_in_dock(inbox)
 
 
 # ------------------------------ ProgressiveBlur -> soft scroll boundary
@@ -299,8 +312,10 @@ def test_reveal_is_harmless_on_a_widget_without_the_property(qapp):
 def test_a_routine_reload_does_not_re_reveal_the_list():
     """reload_email_list runs on every debounced sync tick - roughly once
     a second while syncing. A list that re-revealed itself that often
-    would be unreadable, so the reveal is bound to the two things the
-    user actually did."""
+    would be unreadable, so the reveal is bound to the user actually
+    moving: folder and account changes both go through _navigate, which
+    reveals only when the location changed (the behaviour itself is
+    asserted in test_dock.py)."""
     import inspect
 
     from app.ui.main_window import MainWindow
@@ -309,5 +324,6 @@ def test_a_routine_reload_does_not_re_reveal_the_list():
     assert "_reveal_list" not in body, (
         "the reveal leaked into the routine reload path"
     )
+    assert "_reveal_list" in inspect.getsource(MainWindow._navigate)
     for handler in (MainWindow._on_view_selected, MainWindow._on_account_selected):
-        assert "_reveal_list" in inspect.getsource(handler)
+        assert "_navigate" in inspect.getsource(handler)

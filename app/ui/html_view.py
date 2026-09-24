@@ -348,7 +348,15 @@ def normalize_email_html(html: str, max_width: int) -> tuple[str, dict[str, tupl
         parser = _HtmlNormalizer(max_width, hidden_classes, bg_classes)
         parser.feed(html)
         parser.close()
-        return "".join(parser.out), parser.image_boxes
+        out = "".join(parser.out)
+        # Current Python (3.11.13+, 3.12.11+, 3.13.4+) follows HTML5 and
+        # DISCARDS a tag still open at end of input instead of passing it
+        # through, so a body that is one unterminated tag came back as an
+        # empty string - a message rendered as nothing at all, which is the
+        # one outcome this function promises never to produce.
+        if html.strip() and not out.strip():
+            return html, {}
+        return out, parser.image_boxes
     except Exception as e:
         log.debug("HTML normalization skipped (%s)", e)
         return html, {}

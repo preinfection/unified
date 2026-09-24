@@ -1,4 +1,9 @@
-"""The account drawer: collapse behaviour, grouping, and alignment.
+"""The account drawer: collapse behaviour, grouping, scope, and alignment.
+
+Folder navigation, "Add account" and Settings moved to the dock
+(tests/test_dock.py). What they guaranteed here moved with them; what is
+left is asserted against the rows that remain - "All accounts" and one row
+per account.
 
 Collapsing is the feature with the most ways to go quietly wrong - a
 control that loses its label and gains nothing to identify it, a status
@@ -62,10 +67,11 @@ def test_collapsing_narrows_the_drawer_to_the_rail(sidebar, qapp):
 
 
 def test_every_rail_control_sits_on_one_vertical_line(sidebar, qapp):
-    """Left-aligned pills park their glyph off-centre once the label is
-    gone, so the nav icons, the collapse control and the account avatars
-    each ended up on a slightly different line - the kind of misalignment
-    that reads as sloppy without being nameable."""
+    """Left-aligned rows park their avatar off-centre once the label is
+    gone, so the collapse control and the avatars each ended up on a
+    slightly different line - the kind of misalignment that reads as
+    sloppy without being nameable. The folder pills this used to measure
+    are in the dock now; the rows that remain carry the same guarantee."""
     sidebar.set_collapsed(True, animate=False)
     qapp.processEvents()
     qapp.processEvents()
@@ -73,30 +79,32 @@ def test_every_rail_control_sits_on_one_vertical_line(sidebar, qapp):
     def centre(widget) -> int:
         return widget.mapTo(sidebar, QPoint(0, 0)).x() + widget.width() // 2
 
-    controls = [sidebar.collapse_btn, sidebar._add_btn, sidebar._settings_btn]
-    controls += list(sidebar._nav_buttons.values())
+    controls = [sidebar.collapse_btn]
+    controls += [row._avatar for row in sidebar.rows()]
     centres = {centre(c) for c in controls}
-    assert centres == {RAIL_WIDTH // 2}, f"rail controls are not aligned: {centres}"
+    assert all(abs(c - RAIL_WIDTH // 2) <= 1 for c in centres), (
+        f"rail controls are not aligned: {centres}"
+    )
 
 
-def test_collapsed_controls_keep_a_tooltip_and_an_accessible_name(sidebar):
+def test_collapsed_rows_keep_a_tooltip_and_an_accessible_name(sidebar):
     """A label-less control with no tooltip is a guess, and with no
     accessible name it is announced as "" out loud."""
     sidebar.set_collapsed(True, animate=False)
-    for view, button in sidebar._nav_buttons.items():
-        assert button.text() == ""
-        assert button.toolTip(), f"{view} has no tooltip when collapsed"
-        assert button.accessibleName(), f"{view} has no accessible name"
-    for button in (sidebar._add_btn, sidebar._settings_btn):
-        assert button.toolTip()
+    for row in sidebar.rows():
+        assert not row._email_label.isVisible()
+        assert row.toolTip(), f"{row._email} has no tooltip when collapsed"
+        assert row.accessibleName(), f"{row._email} has no accessible name"
 
 
-def test_expanding_restores_every_label(sidebar):
+def test_expanding_restores_every_label(sidebar, qapp):
     sidebar.set_collapsed(True, animate=False)
     sidebar.set_collapsed(False, animate=False)
-    for view, button in sidebar._nav_buttons.items():
-        assert button.text().strip(), f"{view} lost its label"
-    assert sidebar._settings_btn.text().strip() == "Settings"
+    qapp.processEvents()
+    for row in sidebar.rows():
+        assert row._email_label.isVisible(), f"{row._email} lost its label"
+        assert row.toolTip() == "", "an expanded row still carries a rail tooltip"
+    assert sidebar._all_item._email_label.full_text() == "All accounts"
 
 
 def test_accounts_show_only_their_avatar_when_collapsed(sidebar):
@@ -132,12 +140,15 @@ def test_the_status_dot_returns_on_expanding(sidebar, qapp):
 
 def test_the_unread_count_survives_collapsing_as_a_tooltip(sidebar):
     """There is no room for a count beside a hidden label, so it moves
-    rather than simply vanishing."""
-    sidebar.set_inbox_count(20)
+    rather than simply vanishing. (This guarded "Unified Inbox" when the
+    folders lived here; the count on the dock's inbox is covered in
+    test_dock.py, and the account rows keep the same promise.)"""
     sidebar.set_collapsed(True, animate=False)
-    assert "20" in sidebar._nav_buttons["inbox"].toolTip()
+    assert "3" in sidebar._account_items[1].toolTip()
+    assert "15" in sidebar._all_item.toolTip(), "All accounts lost its total"
     sidebar.set_collapsed(False, animate=False)
-    assert "20" in sidebar._nav_buttons["inbox"].text()
+    assert sidebar._account_items[1]._badge.text() == "3"
+    assert "3 unread" in sidebar._account_items[1].accessibleName()
 
 
 def test_collapsed_state_is_reported_once_per_change(sidebar):
@@ -151,24 +162,72 @@ def test_collapsed_state_is_reported_once_per_change(sidebar):
 
 # --------------------------------------------------------------- grouping
 
-def test_add_account_sits_with_the_accounts_not_with_settings(sidebar):
-    """It used to be pinned to the bottom beside Settings, a few hundred
-    pixels below the list it adds to, with an empty region between - two
-    unrelated things adjacent, two related things apart."""
+def test_the_drawer_makes_no_offers_the_dock_already_makes(sidebar):
+    """"Add account" used to sit under the account rows and Settings was
+    pinned to the bottom. Both are in the dock now; a copy here as well
+    would be a third "Add account" on the first screen anyone sees (the
+    dock, the empty state and the drawer) - three competing offers."""
+    from PySide6.QtWidgets import QAbstractButton
+
+    names = {b.accessibleName() or b.text().strip()
+             for b in sidebar.findChildren(QAbstractButton)}
+    assert names == {"Collapse the sidebar"}, f"stray actions in the drawer: {names}"
+
+
+def test_all_accounts_leads_the_list_and_sums_the_rows(sidebar):
     layout = sidebar._accounts_layout
-    widgets = [
-        layout.itemAt(i).widget() for i in range(layout.count())
-        if layout.itemAt(i).widget() is not None
-    ]
-    assert sidebar._add_btn in widgets, "Add account left the accounts group"
-    # ...and it comes after the account rows, not before them.
-    assert widgets.index(sidebar._add_btn) == len(widgets) - 1
+    widgets = [layout.itemAt(i).widget() for i in range(layout.count())
+               if layout.itemAt(i).widget() is not None]
+    rows = [w for w in widgets if w in sidebar.rows()]
+    assert rows[0] is sidebar._all_item, "All accounts is not first"
+    assert sidebar._all_item.unread() == 3 + 0 + 12
 
 
-def test_settings_stays_pinned_below_the_scroll_region(sidebar):
-    root = sidebar._root
-    last = root.itemAt(root.count() - 1).widget()
-    assert last is sidebar._settings_btn
+def test_exactly_one_row_is_ever_selected(sidebar):
+    """The scope is one thing, so exactly one row shows it - including
+    after a selection the drawer cannot honour."""
+    assert sidebar.selected_rows() == [sidebar._all_item]
+    sidebar.set_current_scope(2)
+    assert [r.account_id for r in sidebar.selected_rows()] == [2]
+    sidebar.set_current_scope(999)          # an account that is not here
+    assert sidebar.selected_rows() == [sidebar._all_item]
+
+
+def test_a_click_is_a_request_not_a_decision(sidebar):
+    """Only the window decides what is current. A drawer that painted the
+    click itself as well would be a second owner of the same state."""
+    seen = []
+    sidebar.scope_selected.connect(seen.append)
+    sidebar._account_items[3].clicked.emit(3)
+    assert seen == [3]
+    assert sidebar.selected_rows() == [sidebar._all_item], (
+        "the drawer changed its own selection without being told"
+    )
+
+
+def test_selection_is_not_frozen_into_an_inline_stylesheet(sidebar):
+    """THE BUG. The selected surface was written into each row with
+    setStyleSheet(f"...{t.BG_SELECTED}"), which fixed the dark palette's
+    value into the widget - after switching to light the selected account
+    kept a dark slab behind it. A property re-themes with the app."""
+    sidebar.set_current_scope(1)
+    for row in sidebar.rows():
+        assert row.styleSheet() == "", f"{row._email} carries an inline stylesheet"
+    assert sidebar._account_items[1].property("selected") == "true"
+
+
+def test_no_accounts_says_so_instead_of_an_empty_region(qapp):
+    motion.set_motion_enabled(False)
+    bar = SidebarWidget()
+    bar.set_accounts([], {})
+    bar.show()
+    qapp.processEvents()
+    try:
+        assert bar._empty_note.isVisible()
+        assert not bar._all_item.isVisible(), "All accounts with no accounts"
+    finally:
+        bar.close()
+        motion.set_motion_enabled(True)
 
 
 def test_an_account_with_nothing_unread_shows_no_badge(sidebar, qapp):

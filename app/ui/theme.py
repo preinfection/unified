@@ -365,7 +365,8 @@ BODY_PADDING = 16      # inner padding of a content page
 ROW_SPACING = 2        # gap between stacked control rows
 TITLE_HEIGHT = 36      # dialog header band
 SIDEBAR_WIDTH = 248    # a real email address at 13px without eliding
-TOOLBAR_HEIGHT = 52
+# Tall enough for the dock (44) with 6px of band above and below it.
+TOOLBAR_HEIGHT = 56
 
 # Message list density. Three lines (sender + time, subject, snippet) is
 # what real clients use and what makes a list scannable; the old single

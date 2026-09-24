@@ -29,7 +29,7 @@ import pytest
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QLabel
 
-from app.ui import theme as t
+from app.ui import motion, theme as t
 
 
 @pytest.fixture(scope="module")
@@ -233,65 +233,77 @@ def test_nav_selects_with_a_surface_and_not_a_left_stripe(qapp):
     """The banned pattern, asserted on real pixels.
 
     A selected destination must NOT paint the accent at its left edge, and
-    MUST lighten across its whole width. Both halves matter: the first
+    MUST lighten across its whole cell. Both halves matter: the first
     forbids the stripe coming back, the second stops the fix being "paint
     nothing".
 
-    ASSERTED ON THE SIDEBAR, NOT ON A LONE PILL. The selected surface used
-    to be painted by each NavPill into itself, so this test could grab one
-    in isolation. It is now a single indicator owned by the drawer that
-    SLIDES between destinations (see SidebarWidget._move_indicator), which
-    is what stopped a folder change being a cross-dissolve with two items
-    half-lit at once. The rule is unchanged and so is what this guards -
-    only the widget that does the painting moved, so the grab moved with
-    it.
+    ASSERTED ON THE DOCK. The folders left the sidebar for the dock, and
+    the selected surface went with them - still one surface, still owned
+    by the container rather than by each item, still sliding between
+    destinations. The rule is unchanged and so is what this guards; only
+    the widget that does the painting moved, so the grab moved with it.
     """
-    from app.ui.components.sidebar import SidebarWidget
+    from app.ui.components.dock import Dock
 
-    sidebar = SidebarWidget()
-    sidebar.resize(t.SIDEBAR_WIDTH, 620)
-    sidebar.show()
-    qapp.processEvents()
-    sidebar._nav_buttons["inbox"].setChecked(True)
-    sidebar._move_indicator(animate=False)      # assert the end state
-    qapp.processEvents()
+    motion.set_motion_enabled(False)
+    try:
+        dock = Dock()
+        dock.show()
+        qapp.processEvents()
+        dock.set_current_folder("inbox")
+        qapp.processEvents()
 
-    image = sidebar.grab().toImage()
-    selected = sidebar._nav_buttons["inbox"].geometry()
-    unselected = sidebar._nav_buttons["trash"].geometry()
-    mid_y = selected.center().y()
+        image = dock.grab().toImage()
+        selected = dock.cell_rect_in_dock(dock.item("inbox")).toRect()
+        unselected = dock.cell_rect_in_dock(dock.item("trash")).toRect()
 
-    left_edge = image.pixelColor(selected.left() + 1, mid_y)
-    assert left_edge.name().lower() != t.ACCENT.lower(), (
-        "the accent side-stripe is back on the nav"
-    )
+        left_edge = image.pixelColor(selected.left() + 1, selected.center().y())
+        assert left_edge.name().lower() != t.ACCENT.lower(), (
+            "the accent side-stripe is back on the nav"
+        )
 
-    on = image.pixelColor(selected.center().x(), mid_y)
-    off = image.pixelColor(unselected.center().x(), unselected.center().y())
-    assert on.lightness() > off.lightness(), (
-        "selecting a nav item no longer changes its surface"
-    )
-    assert on.name().lower() == t.BG_SELECTED.lower()
-    sidebar.close()
+        # Sampled beside the glyph, not on it: a corner of the cell that
+        # only the surface paints.
+        on = image.pixelColor(selected.left() + 4, selected.top() + 5)
+        off = image.pixelColor(unselected.left() + 4, unselected.top() + 5)
+        assert on.lightness() > off.lightness(), (
+            "selecting a nav item no longer changes its surface"
+        )
+        assert on.name().lower() == t.BG_SELECTED.lower()
+        dock.close()
+    finally:
+        motion.set_motion_enabled(True)
 
 
 def test_only_one_destination_is_ever_selected(qapp):
     """A QButtonGroup enforces exclusivity itself, so unchecking its
     members one by one does not clear it - it just re-checks the last one.
     Selecting an ACCOUNT therefore left "Unified Inbox" highlighted too,
-    and the drawer showed two selections at once."""
-    from app.ui.components.sidebar import SidebarWidget
+    and the drawer showed two selections at once.
 
-    sidebar = SidebarWidget()
-    sidebar.set_accounts([{"id": 1, "email": "a@b.c", "provider": "gmail"}], {1: 0})
-    sidebar.show()
+    The dock does not use a button group at all: it keeps one current key
+    and derives every checked state from it. Asserted through every way
+    the checked state can be poked - including the click that
+    QAbstractButton toggles on its own before anyone has decided anything.
+    """
+    from app.ui.components.dock import Dock
+
+    dock = Dock()
+    dock.show()
     qapp.processEvents()
 
-    sidebar._on_account_clicked(1)
-    qapp.processEvents()
-    checked = [v for v, b in sidebar._nav_buttons.items() if b.isChecked()]
-    assert not checked, f"a folder is still selected alongside an account: {checked}"
-    sidebar.close()
+    def checked():
+        return [i.key for i in dock.items if i.isChecked()]
+
+    assert checked() == ["inbox"]
+    dock.set_current_folder("sent", animate=False)
+    assert checked() == ["sent"]
+    dock.item("trash").click()          # a request, not yet a decision
+    assert checked() == ["sent"], f"a click checked a second folder: {checked()}"
+    dock.item("sent").click()           # clicking the current one
+    assert checked() == ["sent"], "clicking the current folder unchecked it"
+    assert not dock.item("settings").isCheckable(), "an action became a destination"
+    dock.close()
 
 
 def test_the_toast_has_no_stripe_token_left():
@@ -422,7 +434,6 @@ def test_custom_components_replace_the_stock_qt_widgets(qapp):
     """The screens that previously showed default-Qt-looking controls use
     the custom components, so the design language is consistent."""
     from app.ui.components.dropdown import Dropdown
-    from app.ui.components.nav_pill import NavPill
     from app.ui.components.primitives import Button, Variant
     from app.ui.compose_dialog import ComposeDialog
 
@@ -436,7 +447,13 @@ def test_custom_components_replace_the_stock_qt_widgets(qapp):
     assert isinstance(dialog.send_btn, Button)
     assert dialog.send_btn.variant() is Variant.PRIMARY
 
+    # Folder navigation is the dock's own painted cell, not a stock
+    # QPushButton wearing an object name.
+    from app.ui.components.dock import Dock, DockItem
+    dock = Dock()
+    assert len(dock.items) == 6
+    assert all(isinstance(item, DockItem) for item in dock.items)
+
     from app.ui.components.sidebar import SidebarWidget
     sidebar = SidebarWidget()
-    assert all(isinstance(b, NavPill) for b in sidebar._nav_buttons.values())
     assert sidebar.width() == t.SIDEBAR_WIDTH

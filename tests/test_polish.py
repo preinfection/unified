@@ -461,16 +461,25 @@ def test_every_animated_component_honours_reduced_motion(qapp):
     movements left in the product."""
     from PySide6.QtCore import QPoint
     from app.ui import motion
-    from app.ui.components.nav_pill import NavPill
+    from app.ui.components.dock import CELL, Dock
     from app.ui.components.toggle import Toggle
 
     motion.set_motion_enabled(False)
     try:
-        pill = NavPill("Inbox")
-        pill.setChecked(True)
-        assert pill._indicator == 1.0, "the nav pill still tweened"
-        pill.setChecked(False)
-        assert pill._indicator == 0.0
+        # The nav pill this used to check is gone; its motion (the sliding
+        # selection) and the dock's magnification both live in the dock.
+        dock = Dock()
+        dock.show()
+        dock.set_current_folder("trash")
+        assert dock.selection_rect() == dock.cell_rect_in_dock(dock.item("trash")), (
+            "the dock's selection still tweened"
+        )
+        dock._pointer_at(dock.item("sent").x() + 10)
+        assert all(item.size_now == CELL for item in dock.items), (
+            "the dock still magnifies under reduced motion"
+        )
+        assert not dock.is_settling(), "a frame timer runs under reduced motion"
+        dock.close()
 
         toggle = Toggle()
         toggle.setChecked(True)

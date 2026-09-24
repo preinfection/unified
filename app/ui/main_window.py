@@ -129,6 +129,13 @@ class MainWindow(QMainWindow):
         self.manager = AccountManager(db)
         self.sync = SyncManager(db.path, self)
 
+        # THE LOCATION, AND THE ONLY COPY OF IT. Two independent axes: the
+        # folder (shown by the dock) and the scope - one account, or None
+        # for every account (shown by the sidebar). Neither widget keeps
+        # its own idea of what is current; both are told, by
+        # _sync_location_widgets, after this changes. Two widgets each
+        # holding their own selection is how the old drawer ended up
+        # showing a folder and an account selected at once.
         self.current_view = "inbox"          # inbox | starred | sent | trash
         self.current_account_id: int | None = None
         self.current_email_id: int | None = None
@@ -204,6 +211,7 @@ class MainWindow(QMainWindow):
         self.sync.all_finished.connect(self._on_all_finished)
 
         self.reload_sidebar()
+        self._update_search_placeholder()
         self.reload_email_list()
         QTimer.singleShot(50, self._startup_integrity_check)
         if self.db.get_accounts():
@@ -406,6 +414,10 @@ class MainWindow(QMainWindow):
             "toggle_sidebar": self.toggle_sidebar,
             "settings": self.open_settings,
             "show_shortcuts": self.show_shortcuts,
+            "go_inbox": lambda: self._on_view_selected("inbox"),
+            "go_starred": lambda: self._on_view_selected("starred"),
+            "go_sent": lambda: self._on_view_selected("sent"),
+            "go_trash": lambda: self._on_view_selected("trash"),
         })
         self._shortcuts.install()
 
@@ -470,12 +482,24 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ toolbar
 
     def _build_toolbar(self) -> None:
+        # The menu-widget slot, not addToolBar: the band spans the whole
+        # window above everything else, and a QMainWindow toolbar would
+        # bring a right-click menu that can hide it.
         self.toolbar = TopToolBar()
-        self.addToolBar(self.toolbar)
+        self.setMenuWidget(self.toolbar)
         self.toolbar.compose_clicked.connect(self.open_compose)
         self.toolbar.refresh_clicked.connect(self.start_sync)
         self.toolbar.console_toggled.connect(self._toggle_console)
         self.toolbar.search_changed.connect(self._on_search_changed)
+        self.dock = self.toolbar.dock
+        self.dock.folder_requested.connect(self._on_view_selected)
+        self.dock.action_requested.connect(self._on_dock_action)
+
+    def _on_dock_action(self, key: str) -> None:
+        if key == "add_account":
+            self.open_add_account()
+        elif key == "settings":
+            self.open_settings()
 
     # --------------------------------------------------------------------- body
 
@@ -483,16 +507,12 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.sidebar = SidebarWidget()
-        self.sidebar.view_selected.connect(self._on_view_selected)
-        self.sidebar.account_selected.connect(self._on_account_selected)
-        self.sidebar.add_account_requested.connect(self.open_add_account)
-        self.sidebar.settings_requested.connect(self.open_settings)
+        self.sidebar.scope_selected.connect(self._on_scope_selected)
         self.sidebar.collapsed_changed.connect(self._on_sidebar_collapsed)
         # Restored without animating: the window has not been shown yet, so
         # there is nothing for a 280ms width tween to narrate.
         if bool(self.settings.get("sidebar_collapsed")):
             self.sidebar.set_collapsed(True, animate=False)
-        splitter.addWidget(self.sidebar)
 
         self.email_list = EmailListView()
         self.email_list.email_selected.connect(self._on_email_selected)
@@ -551,17 +571,32 @@ class MainWindow(QMainWindow):
         self.preview.forward_clicked.connect(lambda: self._compose_from("forward"))
         splitter.addWidget(self.preview)
 
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 5)
-        splitter.setStretchFactor(2, 4)
-        splitter.setSizes([248, 660, 380])
+        splitter.setStretchFactor(0, 5)
+        splitter.setStretchFactor(1, 4)
+        splitter.setSizes([660, 380])
+        self._pane_splitter = splitter
+
+        # THE SIDEBAR IS BESIDE THE SPLITTER, NOT IN IT. It has a fixed
+        # width - it is not user-resizable - so a splitter handle next to it
+        # did nothing, and worse: when the drawer collapsed to its 56px rail
+        # the splitter kept the old 248px section and left 192px of dead
+        # floor between the rail and the list. The width collapsing was
+        # supposed to give back to the two panes never reached them. A box
+        # layout re-reads a fixed width on every change, including every
+        # frame of the collapse animation.
+        body = QWidget()
+        body_row = QHBoxLayout(body)
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(0)
+        body_row.addWidget(self.sidebar)
+        body_row.addWidget(splitter, 1)
 
         # -- Console under the main area (collapsible, hidden by default)
         self.console = ConsoleWidget()
         self.console.setVisible(False)
 
         self._vertical_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._vertical_splitter.addWidget(splitter)
+        self._vertical_splitter.addWidget(body)
         self._vertical_splitter.addWidget(self.console)
         self._vertical_splitter.setStretchFactor(0, 4)
         self._vertical_splitter.setStretchFactor(1, 1)
@@ -627,13 +662,15 @@ class MainWindow(QMainWindow):
         if account_ids != self._known_account_ids:
             self.sidebar.set_accounts(accounts, counts["per_account"])
             self._known_account_ids = account_ids
+            if (self.current_account_id is not None
+                    and self.current_account_id not in account_ids):
+                # The account on screen was removed: fall back to everyone.
+                self.current_account_id = None
+            self._update_search_placeholder()
         else:
             self.sidebar.update_unread_counts(counts["per_account"])
-        self.sidebar.set_inbox_count(counts["total"])
-        self.sidebar.set_current(
-            self.current_view if self.current_account_id is None else None,
-            self.current_account_id,
-        )
+        self._unread_counts = counts
+        self._sync_location_widgets(animate=False)
         for account in accounts:
             self._update_account_status_display(account["id"])
 
@@ -681,20 +718,73 @@ class MainWindow(QMainWindow):
         self.sidebar.update_account_status(account_id, status_key, text)
 
     def _on_view_selected(self, view: str) -> None:
-        self._extra_limit = 0
-        self.current_view = view
-        self.current_account_id = None
-        self._update_search_placeholder()
-        self.reload_email_list()
-        self._reveal_list()
+        """A folder from the dock (or Ctrl+1..4). The scope is kept: Sent
+        while looking at one account means that account's Sent."""
+        self._navigate(view=view)
 
     def _on_account_selected(self, account_id: int) -> None:
+        """A scope from the sidebar. The folder is kept."""
+        self._navigate(account_id=account_id)
+
+    def _on_scope_selected(self, scope) -> None:
+        self._navigate(account_id=scope)
+
+    _KEEP = object()
+
+    def _navigate(self, *, view: str | None = None, account_id=_KEEP) -> None:
+        """Change where the user is. The one entry point for it.
+
+        Everything that shows the location - the dock, the sidebar, the
+        search placeholder, the list - is refreshed from the state set
+        here, so no widget can disagree with another about it.
+        """
+        moved = False
+        if view is not None and view != self.current_view:
+            self.current_view = view
+            moved = True
+        if account_id is not self._KEEP and account_id != self.current_account_id:
+            self.current_account_id = account_id
+            moved = True
         self._extra_limit = 0
-        self.current_view = "inbox"
-        self.current_account_id = account_id
+        self._sync_location_widgets()
         self._update_search_placeholder()
         self.reload_email_list()
-        self._reveal_list()
+        if moved:
+            self._let_go_of_a_message_left_behind()
+            self._reveal_list()
+
+    def _let_go_of_a_message_left_behind(self) -> None:
+        """A message open in Inbox is not in Trash.
+
+        The reading pane used to keep showing it after the user moved to a
+        folder or account that does not contain it - a page from somewhere
+        else, with Reply and Delete still acting on it. And coming back
+        later re-selected its row while the pane had meanwhile been
+        blanked by an empty folder: a highlighted row with nothing open.
+        Moving somewhere the message is not lets go of it.
+        """
+        if self.current_email_id is None:
+            return
+        if self.email_list._model.index_of(self.current_email_id).isValid():
+            return
+        self.current_email_id = None
+        if self.email_list.row_count():
+            self.preview.reset()
+        else:
+            self.preview.show_nothing()
+
+    def _sync_location_widgets(self, *, animate: bool = True) -> None:
+        """Tell the dock and the sidebar where the user is. Never the other
+        way round - see the note on current_view in __init__."""
+        self.dock.set_current_folder(self.current_view, animate=animate)
+        self.sidebar.set_current_scope(self.current_account_id)
+        counts = getattr(self, "_unread_counts", None) or {"total": 0, "per_account": {}}
+        # The inbox badge counts the inbox the Inbox icon would open: every
+        # account's, or only the one in scope.
+        if self.current_account_id is None:
+            self.dock.set_unread(counts["total"])
+        else:
+            self.dock.set_unread(counts["per_account"].get(self.current_account_id, 0))
 
     def _reveal_list(self) -> None:
         """Let the list arrive when the user changed WHERE THEY ARE.
@@ -713,11 +803,21 @@ class MainWindow(QMainWindow):
         """
         motion.reveal(self.email_list)
 
+    _FOLDER_NAMES = {"inbox": "Inbox", "starred": "Starred", "sent": "Sent",
+                     "trash": "Trash"}
+
     def _update_search_placeholder(self) -> None:
-        """Search always scopes to whatever is currently shown: a single
-        account's inbox, or every account combined."""
-        text = "Search inbox..." if self.current_account_id is not None \
-            else "Search all accounts..."
+        """Search always scopes to whatever is currently shown, so the field
+        says what that is: the folder, and whose."""
+        folder = self._FOLDER_NAMES.get(self.current_view, "mail").lower()
+        if not self.db.get_accounts():
+            text = "Search"
+        elif self.current_account_id is None:
+            text = f"Search {folder} in all accounts"
+        else:
+            account = self.db.get_account(self.current_account_id)
+            text = f"Search {folder} in {account['email']}" if account \
+                else f"Search {folder}"
         self.toolbar.set_search_placeholder(text)
 
     # --------------------------------------------------------------- email list
@@ -893,9 +993,12 @@ class MainWindow(QMainWindow):
             self.load_more_btn.setVisible(True)
             self._load_more_row.setVisible(True)
         else:
-            self.statusBar().showMessage(
-                f"{total:,} message{'s' if total != 1 else ''}"
-            )
+            if not self._known_account_ids:
+                self.statusBar().showMessage("No accounts connected")
+            else:
+                self.statusBar().showMessage(
+                    f"{total:,} message{'s' if total != 1 else ''}"
+                )
             self.load_more_btn.setVisible(False)
             self._load_more_row.setVisible(False)
         self._refresh_center_page(shown)
@@ -908,8 +1011,11 @@ class MainWindow(QMainWindow):
         """
         accounts = self.db.get_accounts()
         # Compose is an offer, and it is only true once there is somewhere to
-        # send from. See TopToolBar.set_compose_enabled.
+        # send from. See TopToolBar.set_compose_enabled. Search and sync
+        # follow the same rule.
         self.toolbar.set_compose_enabled(bool(accounts))
+        self.toolbar.set_mailbox_available(bool(accounts))
+        self._set_reading_pane_present(bool(accounts))
         account = None
         if self.current_account_id is not None:
             current = next(
@@ -939,22 +1045,43 @@ class MainWindow(QMainWindow):
             self.center_stack.setCurrentIndex(2)
             return
         self.center_stack.setCurrentIndex(0)
+        if not self.preview.is_showing_message():
+            # Back from an empty folder: the pane was blank because there
+            # was nothing to pick. Now there is, so it says so.
+            self.preview.reset()
+
+    def _set_reading_pane_present(self, present: bool) -> None:
+        """No accounts, no reading pane.
+
+        THE EMPTY STATE WAS THE POPULATED LAYOUT WITH THE DATA TAKEN OUT.
+        With nothing connected the window still reserved a reading pane -
+        on a 1440px screen, a 440px blank column with a divider down it,
+        beside a list pane whose only content was the offer to add an
+        account. Nothing will ever be read in it until an account exists,
+        so it goes, and the offer is centred in the space it was holding.
+        The splitter remembers the pane's width, so it comes back exactly
+        where it was.
+        """
+        if self.preview.isHidden() == (not present):
+            return
+        self.preview.setVisible(present)
 
     def _show_empty_state(self, *, has_accounts: bool) -> None:
         search = self.toolbar.search_text()
         if not has_accounts:
             self.empty_state.set_state(
-                icon="add_circle", title="Nothing here yet",
-                detail="Connect a Gmail or IMAP account and Unified will keep "
-                       "an encrypted copy of it on this machine.",
+                icon="add_circle", title="No accounts yet",
+                detail="Connect a Gmail or IMAP account. Unified keeps an "
+                       "encrypted copy of your mail on this machine, so it "
+                       "stays readable offline.",
                 action_text="Add account", on_action=self.open_add_account,
             )
-            # ONE OFFER PER SCREEN. The reading pane's own placeholder would
-            # otherwise sit beside this one telling the user to pick a
-            # message from a list that is empty.
+            # ONE OFFER PER SCREEN. The reading pane is hidden with no
+            # accounts (see _set_reading_pane_present); blanking it too
+            # means it comes back empty rather than with a stale message.
             self.preview.show_nothing()
             return
-        self.preview.reset()
+        self.preview.show_nothing()
         if search:
             self.empty_state.set_state(
                 icon="search", title="No results",
@@ -962,7 +1089,7 @@ class MainWindow(QMainWindow):
             )
         elif self.current_view == "starred":
             self.empty_state.set_state(
-                icon="starred_nav", title="No starred messages",
+                icon="star_outline", title="No starred messages",
                 detail="Starred messages collect here.",
             )
         elif self.current_view == "sent":
@@ -1352,13 +1479,12 @@ class MainWindow(QMainWindow):
         account = dialog.added_account
         dialog.deleteLater()
         if account:
-            # Jump to the new account; it queues immediately even if other
-            # accounts are mid-sync (shows Waiting/progress, never empty).
-            self.current_view = "inbox"
-            self.current_account_id = account["id"]
-            self._update_search_placeholder()
+            # Jump to the new account's inbox; it queues immediately even if
+            # other accounts are mid-sync (shows Waiting/progress, never
+            # empty). The sidebar is rebuilt FIRST so the new row exists to
+            # be selected.
             self.reload_sidebar()
-            self.reload_email_list()
+            self._navigate(view="inbox", account_id=account["id"])
             self.sync.request_sync([account["id"]])
 
     def open_settings(self) -> None:

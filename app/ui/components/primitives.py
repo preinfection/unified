@@ -355,18 +355,25 @@ class Field(QWidget):
 class Toolbar(QWidget):
     """A horizontal band of controls with a hairline under it.
 
-    Not QToolBar: QToolBar brings a drag handle, an extension chevron and
-    its own layout rules, all of which had to be styled away. This is the
-    band, and nothing else.
+    Not QToolBar: QToolBar brings a drag handle, an extension chevron, a
+    right-click menu that can hide the band, and its own layout rules, all
+    of which had to be styled away. This is the band, and nothing else.
+
+    `manual=True` leaves out the row layout, for a band that places its
+    children itself (the main toolbar centres the dock, which no box
+    layout can do). A layout left in place but empty would still own the
+    band's minimum size and let the window shrink past its contents.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, manual: bool = False):
         super().__init__(parent)
         self.setObjectName("toolbarBand")
         self.setFixedHeight(t.TOOLBAR_HEIGHT)
-        self.row = QHBoxLayout(self)
-        self.row.setContentsMargins(t.SPACE_LG, 0, t.SPACE_LG, 0)
-        self.row.setSpacing(t.SPACE_SM)
+        self.row = None
+        if not manual:
+            self.row = QHBoxLayout(self)
+            self.row.setContentsMargins(t.SPACE_LG, 0, t.SPACE_LG, 0)
+            self.row.setSpacing(t.SPACE_SM)
 
 
 class ElidingLabel(QLabel):

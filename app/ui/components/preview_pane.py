@@ -441,6 +441,9 @@ class PreviewPane(QWidget):
         self._stack.setCurrentWidget(self._empty)
         self.set_actions_enabled(False)
 
+    def is_showing_message(self) -> bool:
+        return self._stack.currentWidget() is not self._empty
+
     def reset(self) -> None:
         """Back to the default "nothing selected" state."""
         self.show_placeholder(

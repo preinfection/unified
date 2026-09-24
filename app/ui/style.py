@@ -150,6 +150,13 @@ QLineEdit#searchField {{
 }}
 QLineEdit#searchField:hover {{ border-color: {t.BORDER_LIGHT}; }}
 QLineEdit#searchField:focus {{ border: 1px solid {t.ACCENT}; background: {t.BG_HOVER}; }}
+/* Disabled with no account to search: an outline on the band, not a
+   field that looks ready to take a query. */
+QLineEdit#searchField:disabled {{
+    background: transparent;
+    border-color: {t.BORDER};
+    color: {t.TEXT_TERTIARY};
+}}
 QComboBox::drop-down {{ border: none; width: 22px; background: transparent; }}
 QComboBox::down-arrow {{
     image: url({arrow_url});
@@ -405,37 +412,17 @@ QPushButton#iconButton:checkable:checked {{
     border-color: {t.BORDER_LIGHT};
 }}
 
-/* Folder navigation (Unified Inbox / Starred / Sent / Trash).
-   ONE SIGNAL PER STATE. This used to stack an accent fill, an accent text
-   color, a weight change AND a 3px animated bar down the left edge - four
-   cues for one boolean. A selected item is now a raised warm surface with
-   primary text; NavPill animates that fill in rather than growing a stripe
-   (see components/nav_pill.py). */
-QPushButton#navPill {{
-    background: transparent;
-    border: none;
-    border-radius: {t.RADIUS_MD}px;
-    padding: 6px 10px 6px 12px;
-    text-align: left;
-    color: {t.TEXT_SECONDARY};
-    font-weight: {t.WEIGHT_MEDIUM};
-    min-height: {t.TAB_HEIGHT - 12}px;
-}}
-/* COLLAPSED, THE PILL IS A SQUARE AND ITS GLYPH IS CENTRED IN IT. Left
-   alignment plus a 12px left pad is right for "icon, then label"; with the
-   label gone it just parks the icon off-centre in a 56px rail, and the
-   nav icons, the collapse control and the account avatars each ended up
-   on a slightly different vertical line. */
-QPushButton#navPill[railed="true"] {{
-    padding: 6px 0;
-    text-align: center;
-}}
-QPushButton#navPill:hover {{ color: {t.TEXT_PRIMARY}; }}
-QPushButton#navPill:checked {{
+/* ---- Dock (components/dock.py) ----
+   The dock paints its own pill, cells and selection from tokens; only its
+   floating label is a styled widget. It matches the tooltip exactly, so a
+   dock label and a tooltip elsewhere read as the same thing. */
+QLabel#dockLabel {{
+    background: {t.BG_OVERLAY};
     color: {t.TEXT_PRIMARY};
-    font-weight: {t.WEIGHT_MEDIUM};
+    border: 1px solid {t.BORDER_LIGHT};
+    border-radius: {t.RADIUS_SM}px;
+    padding: 4px 9px;
 }}
-QPushButton#navPill:focus {{ color: {t.TEXT_PRIMARY}; }}
 
 /* Primary compose action. Flat parchment, no gradient, no glow. */
 QPushButton#composeButton {{
@@ -704,6 +691,19 @@ QWidget#sidebar {{
     border: none;
     border-right: 1px solid {t.BORDER};
 }}
+/* Account rows. Selected is the raised step and nothing else, exactly
+   like a selected message row - one signal per state. A property, not an
+   inline stylesheet, so a theme switch reaches it. The focus ring shows
+   for the keyboard only: the rows take focus from Tab, never from a
+   click. */
+QWidget#accountItem {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: {t.RADIUS_MD}px;
+}}
+QWidget#accountItem:hover {{ background: {t.BG_HOVER}; }}
+QWidget#accountItem[selected="true"] {{ background: {t.BG_SELECTED}; }}
+QWidget#accountItem:focus {{ border-color: {t.FOCUS_RING}; }}
 QLabel#accountEmail {{
     color: {t.TEXT_PRIMARY};
     font-weight: {t.WEIGHT_MEDIUM};

@@ -21,7 +21,7 @@ user's expense rather than its own.
     s                    star the selected message
     #  or Delete         delete the selected message
     u                    mark unread
-    Ctrl+1..9            jump to an account
+    Ctrl+1..4            Inbox, Starred, Sent, Trash - the dock, in order
     Ctrl+,               settings
     ?                    the shortcut list itself
 
@@ -73,6 +73,11 @@ BINDINGS: tuple[Binding, ...] = (
     Binding(("U",), "Mark unread", "Reading", "mark_unread"),
     Binding(("S",), "Star or unstar", "Reading", "toggle_star"),
     Binding(("Delete", "#"), "Delete message", "Reading", "delete_message"),
+
+    Binding(("Ctrl+1",), "Inbox", "Folders", "go_inbox", literal=False),
+    Binding(("Ctrl+2",), "Starred", "Folders", "go_starred", literal=False),
+    Binding(("Ctrl+3",), "Sent", "Folders", "go_sent", literal=False),
+    Binding(("Ctrl+4",), "Trash", "Folders", "go_trash", literal=False),
 
     Binding(("Ctrl+F", "/"), "Search", "Finding", "focus_search"),
     Binding(("Esc",), "Clear search, or focus the list", "Finding", "escape",
