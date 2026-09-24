@@ -21,13 +21,11 @@ def generate_icon() -> None:
     """Build a proper multi-resolution .ico for the exe's Windows resource.
 
     A single 256px image saved with an .ico extension only ever contains
-    that one size - Explorer and the taskbar then have to scale it down
+    that one size - Explorer/the taskbar then has to scale it down
     themselves for small contexts, which is exactly what makes app icons
-    go blurry or vanish at 16-24px. Each size here is drawn fresh by
-    app.ui.icons at its own resolution, so the corner radius, the flap
-    thickness and the margins stay optically right at 16px as well as at
-    256px, and the 16/20px versions drop the detail that would otherwise
-    merge into a smudge.
+    go blurry or vanish at 16-24px. Each size here is rendered by
+    app.ui.icons at its own resolution (proportional stroke width, not a
+    scaled-down large one) and assembled into one real multi-size .ico.
     """
     import io
 
@@ -60,27 +58,7 @@ def generate_icon() -> None:
     del app
 
 
-def _gmail_discovery_document() -> Path:
-    """The one Google API discovery document this app needs.
-
-    Checked before the build so a missing or moved document fails here,
-    loudly, instead of producing an executable that only fails the first
-    time someone signs in to Gmail. What actually does the pruning is
-    installer/pyinstaller_hooks/hook-googleapiclient.model.py.
-    """
-    import googleapiclient
-
-    return (
-        Path(googleapiclient.__file__).parent
-        / "discovery_cache" / "documents" / "gmail.v1.json"
-    )
-
-
 def build() -> int:
-    gmail_doc = _gmail_discovery_document()
-    if not gmail_doc.exists():
-        raise SystemExit(f"Gmail discovery document not found at {gmail_doc}")
-
     args = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
@@ -95,11 +73,8 @@ def build() -> int:
         # code by default, never loose non-Python data files it can't see
         # referenced anywhere in the source.
         "--add-data", f"{ROOT / 'assets' / 'icons'}{os.pathsep}assets/icons",
-        # Only the Gmail discovery document is bundled - see
-        # installer/pyinstaller_hooks/hook-googleapiclient.model.py, which
-        # replaces PyInstaller's own hook for that module and drops the
-        # other ~599 Google API documents (about 100 MB).
-        "--additional-hooks-dir", str(ROOT / "installer" / "pyinstaller_hooks"),
+        # Google API client ships bundled discovery documents as data files.
+        "--collect-data", "googleapiclient",
         # Keyring discovers its Windows backend at runtime.
         "--hidden-import", "keyring.backends.Windows",
         "--hidden-import", "win32ctypes.core",

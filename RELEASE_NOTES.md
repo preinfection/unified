@@ -1,199 +1,211 @@
 # Unified
 
-## v1.3.0
+## v1.4.0
 
-A full UI/UX redesign. The product does the same things it did in v1.2.1
-and does them behind a new design system, a rebuilt shell, and a set of
-workflows the old interface simply did not have.
+> **Note on lineage.** This line was developed from v1.2.1 in parallel
+> with the v1.3.0 redesign that reached `main` on 2026-09-03, and the two
+> overlap heavily in intent. It is not a continuation of v1.3.0 and has
+> not been merged with it. Numbered 1.4.0 only so its installer cannot be
+> confused with, or silently upgrade over, the v1.3.0 build - the two
+> share an installer AppId.
 
-### A design direction, not just a system
+A product-level redesign of the interface, followed by a production
+polish pass. No change to how mail is fetched, stored, encrypted or
+authenticated: every call into the database, sync, transport and security
+layers behaves as it did in v1.2.1, apart from the two additions noted
+under *Backend* below, both of which exist to support features in this
+release.
 
-The palette is a **warm neutral ground with a cool accent** in both
-themes. The reflex answer for a dark desktop tool - a cool grey-blue
-near-black with a blue accent - is what every generated "modern dark
-mode" ships, and it is what v1.2.1 was. Shifting the neutrals warm puts
-the field in tension with the accent, so the accent reads as chosen
-rather than as the only colour present; in light it makes the theme paper
-rather than office white, which is the right material for a surface that
-is almost entirely text. Neither theme uses pure black or white anywhere.
+### Folders in a dock, accounts in the sidebar
 
-Surfaces are **material**, not flat fills with a grey outline: a raised
-control catches light along its top edge and shades toward the ground
-below it.
+The sidebar answered two questions in one list - which folder, and whose
+mail - and the answers took turns: choosing an account un-chose the
+folder. Inbox, Starred, Sent and Trash now sit in a dock centred in the
+toolbar, with Add account and Settings after a divider; the sidebar is
+"All accounts" and one row per account. Both are always shown and both
+can be true at once, so "work@company.com's Sent" is a place you can be.
+The window owns that location and tells the two widgets, rather than
+each keeping its own copy - which is how the old drawer once showed a
+folder and an account selected together.
 
-### One icon system
+The dock magnifies toward the pointer (adapted from Magic UI's Dock, at
+1.25x rather than 1.5x) through an overdamped spring, inside a reserved
+box so nothing else in the toolbar ever moves. The selected folder is one
+surface that slides. The inbox's unread count is a badge on the dock that
+follows the account in view. `Ctrl+1` to `Ctrl+4` jump to the folders;
+`Tab`, the arrow keys and `Enter` work through the dock and the account
+list.
 
-All 47 icons were redrawn from zero on a single grid - 24px box, 18px
-live area, one 1.75 stroke, round caps and joins, optical rather than
-geometric sizing. The previous set was two generations mixed together at
-four different stroke widths, which is why it read as messy at the 16px
-the UI actually renders it at. Four glyphs that duplicated another or
-never resolved at small sizes are retired. The app mark is now a solid
-tile with the envelope flap knocked out, because a thin-stroked outline
-turns to mush at 20px.
+With no accounts connected, the window no longer reserves a blank reading
+pane beside the offer to add one, and search, sync and compose are
+disabled with a line saying why. The search field is sized to a query
+instead of spanning the window.
 
-### A real motion language
+### The rest of the interaction pass
 
-Qt Style Sheets have no `transition`, which is why a stylesheet-driven Qt
-app feels dead: every hover, press and selection is an instant swap.
-`app/ui/design/motion.py` ports the [transitions.dev](https://transitions.dev)
-token set to Qt and layers Apple's fluid-interface rules on top - respond
-on press, animate from the presentation value so an interrupted gesture
-is picked up rather than snapped, exits faster than entrances except
-where the motion is symmetric.
+Each adapted from a Magic UI component and cut down to what the product
+can justify:
 
-What that turned into:
+- **Theme** is a sun/moon control in Settings > Appearance instead of a
+  dropdown. It applies at once and the new theme spreads out from the
+  control across every open window; Cancel puts it back.
+- **Console** is a quiet terminal-style log: aligned time, level, source
+  and message columns, colour only on warnings and errors, batched so a
+  burst of a thousand lines is one repaint, and a steady prompt while it
+  is following new output.
+- **Reply and forward** type the quoted original in beneath the cursor.
+  The whole text is in the message from the first frame, and any
+  keystroke, click or paste ends the reveal at once.
+- **Updates**: GitHub's releases are checked at most hourly, never during
+  startup and never blocking anything. When a newer version exists, an
+  "Update" button appears in the toolbar and opens its release page; a
+  glint crosses it once when it appears. Settings > Changelog lists every
+  published release.
+- **Opening**: a slowly turning dotted globe, then the name, then the
+  mailbox. It never delays a startup that is already finished.
+- **Smooth pointer**, experimental and off by default. A smoothed pointer
+  trails the real one (about 54ms here), so it steps aside over text,
+  handles and drags.
 
-- Buttons paint themselves: press scales to 0.972, hover arrives over
-  130ms, and the focus ring is drawn outside the rect so tabbing along a
-  row moves nothing.
-- A **sliding indicator** in the sidebar and the message list: one marker
-  that travels between rows rather than two marks blinking.
-- Icon swap with real blur (the star filling in, the appearance mode
-  changing), toast rise-and-scale, modal and dropdown open/close
-  asymmetry, page side-by-side for the narrow layout, a skeleton shimmer
-  sweep, number pop-in on unread counts, error shake on an invalid
-  compose field, card resize on the sidebar collapse, and a staggered
-  reveal when a message opens.
-- All of it routed through one reduced-motion check, so the OS setting
-  collapses every duration to zero.
+Every animation has a reduced-motion state that is its final state.
 
-### Typography that has a hierarchy again
+### Fixed in the same pass
 
-A Qt stylesheet's font declarations override every `QFont` set in code,
-so the `* { font-size: 13px }` rule was silently flattening the entire
-ramp: every heading, subject line and dialog title rendered at 13px. The
-base font is now installed with `QApplication.setFont()`. The ramp also
-widens past the dense-metadata cluster (11/12/13/15/18/22/28), so a
-subject line is 22px against 13px body, and sizes at or above 17px use
-Segoe UI Variable Display - the optical cut Windows ships for them.
+- Collapsing the sidebar to its rail left a 192px dead strip instead of
+  giving the width to the list and the reading pane.
+- After switching to the light theme, the selected account row kept a
+  dark-mode background, and every avatar drew a near-white initial on a
+  pale disc.
+- Icons were rasterized at 1x only and drawn soft at 125-200% scaling.
+- The reading pane kept showing a message after moving to a folder that
+  does not contain it.
+- A message body that was a single unterminated HTML tag rendered as
+  nothing on current Python versions.
+- Closing the window within 400ms of opening could start a sync
+  afterwards on threads nothing waited for.
 
-### A real design system
+Tests: 412 to 586.
 
-Every color, size, radius, duration and type style now comes from one
-place (`app/ui/design/`), and widgets ask for them by *role* rather than
-by value.
+### The keyboard works
 
-- **Semantic color roles** with two palettes behind them. Elevation runs
-  sidebar -> message list -> reading pane in both themes, so the pane
-  structure reads even with every border removed.
-- **Accent is split in two**: a hue family for indicators, focus and
-  selection tints, and a solid family for filled controls that is tuned
-  for 4.5:1 against its own label. Conflating the two is how a blue
-  button ends up with an unreadable white label.
-- **One stylesheet**, rendered from tokens, that raises on an unknown
-  placeholder instead of silently dropping the rule it appears in.
-- **A live token facade**: a hand-painted delegate reading
-  `t.TEXT_PRIMARY` inside `paint()` is simply correct after a theme
-  change, with no invalidation protocol.
-- **Measured contrast.** Every foreground/background pairing the app
-  actually renders is listed with a minimum ratio and asserted by test,
-  in both themes.
+`app/ui/shortcuts.py` was complete, documented, and imported by nothing.
+Every action in the client required the mouse. The bindings are the ones
+Gmail, Thunderbird and Mailspring already share, so nothing has to be
+learned:
 
-See `DESIGN.md` for the whole system.
+    j / k or arrows   move through the list      /  or Ctrl+F   search
+    Enter             open the focused message   n  or Ctrl+N   compose
+    s                 star or unstar             r  or F5       sync now
+    u                 mark unread                Ctrl+B         sidebar
+    # or Delete       delete                     Ctrl+,         settings
+    Esc               back out one step          ?  or F1       this list
 
-### Light theme
+Single-letter shortcuts stand down while focus is in a text field, so the
+app is still typeable. The help sheet is generated from the same table
+the shortcuts are installed from, so it cannot document a keyboard the
+app does not have.
 
-A real light palette, not the dark one inverted - light UI takes more of
-its structure from borders and less from fills, and its surfaces sit
-closer together. The app follows the Windows light/dark setting by
-default, and switches live: the palette, the QPalette (which covers
-everything QSS cannot reach) and the stylesheet all move together.
+### Light mode is reachable
 
-### A rebuilt shell
+The light palette had been generated in OKLCH and contrast-checked
+against every surface, and nothing could display it: `apply_mode()` had
+exactly one caller, at import, with `"dark"` hardcoded. Both themes are
+now selectable in Settings and switch live.
 
-- A **command bar** replaces the old QToolBar: app identity, Compose as
-  the one filled button in the window, sync, search, appearance, console
-  and an overflow menu.
-- The **sidebar** now separates places (mailboxes) from filters
-  (accounts). Previously a folder and an account both looked like a
-  selected pill, which made "Inbox, filtered to this account" and "this
-  account's inbox" visually identical.
-- The **message list has its own header**, stating where you are, what it
-  is filtered to and how many messages there are. "Showing 100 of 8,412"
-  is now said out loud instead of inferred.
-- The **reading pane** lost its card: the message body sits directly on
-  the pane, with the subject as a real heading, expandable recipients, an
-  absolute timestamp, and actions grouped by consequence - reply and
-  forward on the left, destructive separated on the right.
+Making that work needed a real fix rather than a toggle. Around thirty
+labels carried their colour as an inline stylesheet, which outranks the
+application stylesheet and is therefore frozen at construction - so every
+one of them stayed dark-mode ink. They use theme roles now and re-colour
+with the stylesheet.
 
-### New in the interface
+### Reply, reply all, forward
 
-- **Reply, Reply all and Forward**, quoting the original the way a mail
-  client should, with the cursor above the quote.
-- **Cc and Bcc**, hidden until asked for. (Bcc is an envelope-only
-  recipient over SMTP, so a blind copy is never disclosed in the headers.)
-- **An unread filter** and **Mark all as read**.
-- **List density** - Compact, Cozy or Relaxed.
-- **Keyboard shortcuts** for every frequent action, including `J`/`K`
-  navigation, `R`/`Shift+R`/`F`, `S`, `U`, `Del`, `Ctrl+1..4` and `/` for
-  search.
-- **A responsive shell**: below 1080px the sidebar becomes an icon rail;
-  below 900px the reading pane takes over the list's space with a Back
-  button.
-- **Designed empty, loading and error states**, each saying what happened
-  and offering the next action, with technical detail kept available
-  rather than led with.
-- **Dialogs in the product's own language** - `QMessageBox` is gone.
+The reading pane had two actions (star, delete) and no way to answer a
+message. It now leads with the subject as the page title, states the
+sender once, and offers reply / reply all / forward on the left with
+star / mark unread / delete on the right.
+
+Recipient handling is the part worth stating: reply prefers `Reply-To`
+where the message carried one, reply-all copies the other recipients
+*minus the account that received it*, and forward addresses nobody.
+
+**There is still no Archive.** The folder vocabulary is exactly
+inbox/sent/trash and the integrity checker deletes rows in any other
+folder, so an Archive button would need a schema change, a sync change
+and an IMAP move behind it. A missing feature is better than a
+misleading one.
+
+### Opening
+
+The app opens maximized into the normal Windows work area - taskbar
+visible, ordinary window controls, no kiosk mode, nothing hard-coded.
+
+The opening surface is maximized too, on the same background the shell is
+about to occupy, and cross-dissolves into it. Previously a 340x220 card
+vanished and a differently shaped 1280x800 window appeared somewhere
+else.
+
+The opening bar is a hairline the width of the wordmark, sitting under
+it. It advances on the four real initialization stages and reaches
+completion in exactly one place: when initialization actually finishes.
+A startup too fast for the animation to play skips it rather than
+flashing.
+
+### Also
+
+- Compose gained Cc/Bcc, and send is a state machine: sending, sent and
+  failed each say what happened. A failed send keeps the message and the
+  reason on screen instead of throwing a modal that erases both.
+- Settings gained an Appearance page (theme, row density, reduced
+  motion) and every row now explains what it does.
+- Row density (comfortable/compact) and a collapsible sidebar, which
+  collapses on its own below 1080px and never overrides an explicit
+  choice.
+- Empty, loading and error states all use the same design system.
 
 ### Fixed
 
-- **Read and unread rows now share one left edge.** The unread dot was
-  inline, so every unread sender name sat 10px right of every read one
-  and a mixed list went ragged down the middle. It has its own gutter.
-- **Avatar colors are stable across launches.** They were derived from
-  `hash()`, which is salted per process, so the same correspondent got a
-  different color every time the app started.
-- **Subject and preview no longer share one elision.** They were joined
-  into a single string, so a long subject silently ate the preview.
-- **Custom widget surfaces actually paint.** Qt draws no stylesheet
-  background *or border* for a user-defined QWidget subclass without
-  `WA_StyledBackground`, which is why several surfaces had no visible
-  boundary.
-- **Disabled danger and link buttons look disabled**, and an icon-only
-  primary action keeps its fill.
-- **The status strip shows one string.** `QStatusBar.showMessage()`
-  paints over permanent widgets rather than replacing them, so two were
-  drawn on top of each other.
-- **Empty and error copy no longer overlaps** the text below it.
-- **Toasts moved to the bottom-right**, clear of the reading pane's
-  action row.
-
-### Accessibility
-
-- Keyboard focus rings that appear for Tab and shortcut focus but not for
-  a mouse click, and that do not move the layout.
-- Every icon-only control carries a tooltip and an accessible name,
-  enforced by test.
-- Reading order tab order, accessible names on the panes, and an
-  accessible description per message row.
-- The OS reduced-motion preference is read once and honored everywhere.
-- Nothing is communicated by color alone.
-
-### Performance
-
-- The message-row delegate no longer builds five QFonts and three
-  QFontMetrics per row per frame; they are cached and rebuilt only on a
-  theme or density change.
-- Elevation prefers surface contrast over `QGraphicsDropShadowEffect`,
-  which is now used only on surfaces that genuinely float and never on a
-  scrolling view.
+- Message rows were laid out 14px wider than the viewport, so subjects
+  and snippets were hard-clipped mid-word with no ellipsis and the list
+  grew a horizontal scrollbar it had no use for.
+- The reading pane's leading was 2.2x the type size. Qt's
+  `ProportionalHeight` is a percentage of the font's natural line
+  spacing, not of its size; the token said 165% and meant it.
+- Reply and forward crashed outright - `QTextCursor.Start` does not
+  exist in PySide6.
+- The hover star and trash on a message row were painted, hit-tested and
+  connected to nothing.
+- Toasts covered the toolbar's search field and buttons for four and a
+  half seconds; they sit bottom-right now, and identical notices refresh
+  one card instead of stacking three.
+- Closing the opening window mid-startup crashed the process and the main
+  window never appeared.
+- The primary button was 30px tall while every other button was 32, so
+  Cancel and Save sat two pixels out of line in every dialog.
+- Settings drew two hairlines between every pair of rows.
+- Senders with no name showed `(` as their avatar initial.
+- A long sender name ran under the timestamp beside it; a long subject
+  took seven lines and pushed the message off the pane.
+- Four components ignored the reduced-motion setting, and three eased on
+  a different curve from everything else.
 
 ### Backend
 
-Deliberately minimal, and only where the interface required it: Cc/Bcc on
-both send paths, `unread_only` filtering and `mark_all_read` in the
-database layer, and two appearance settings. Sync, authentication,
-encryption, the attachment guard and the HTML renderer are unchanged.
+Two additions, both required by the above:
+
+- A `reply_to` column, added by the existing additive-migration path, so
+  a reply to a mailing list goes to the list. Databases from earlier
+  versions migrate without data loss.
+- Cc/Bcc on both send paths. Bcc is handled oppositely per transport and
+  deliberately so: kept out of the MIME for SMTP, where the envelope
+  carries it, and written as a header for the Gmail API, which has no
+  envelope and would otherwise never deliver it.
 
 ### Tests
 
-250 pass, up from 227. `tests/test_design_system.py` was rewritten to
-assert the system's *contract* - ordered and distinguishable elevation,
-ordered and restrained radii, WCAG AA on every rendered pairing in both
-themes, no unresolved tokens, no hardcoded colors outside the design
-package, real rendered pixels for the components - rather than equality
-with the external visual reference this release replaces.
+245 to 391. The new suites cover the opening sequence, appearance and
+keyboard wiring, list geometry under deliberately awkward data, reply
+field building, and the polish regressions above.
 
 ## v1.2.1
 

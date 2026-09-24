@@ -1,69 +1,75 @@
-"""Section headings.
+"""Section breaks: the small uppercase label that introduces a group
+(Settings' "General" / "Connected accounts", the sidebar's "Accounts"), and
+the larger heading a dialog opens with.
 
-Two of them, doing genuinely different jobs:
+BOTH OF THESE USED TO CARRY A COLORED STRIPE. SectionHeader had a 3px
+accent tick beside an accent-tinted title; DialogHeading had a 4px accent
+stripe beside the heading text. Neither survives, for the same reason the
+nav pill's left bar did not: a short colored bar next to a label is
+ornament wearing the costume of a system, and putting the app's single
+brightest value on a static label spends it on the least important thing
+on the screen. A section label's job is to be found when looked for and
+ignored otherwise, which is a job for size, weight, letter-spacing and
+color VALUE, not for hue.
 
-* `SectionHeader` introduces a group *inside* a surface - the sidebar's
-  ACCOUNTS list, a settings group. It is a quiet uppercase overline with
-  an optional trailing action, not a colored bar with an accent tick. A
-  section break should be the least interesting thing on the screen; the
-  moment every group announces itself in accent color, the one thing
-  that genuinely needs the accent (the active row) has to compete.
-* `DialogHeading` names a whole surface. It is a real heading in the type
-  ramp with an optional one-line subtitle underneath, so a dialog opens
-  with a sentence explaining itself rather than a bare noun.
-
-Both expose `setText` in Qt's spelling because they stand in for QLabel
-at their call sites.
+What replaces the tick is a rule that runs from the end of the label to the
+edge of the container. That is a real typographic device, it says "this
+group starts here and extends across this width", and unlike a stripe it
+scales with the panel instead of sitting in the corner of it.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from app.ui import theme as t
+# The hairline is the shared primitive, not a third implementation of it.
+# There were three copies of "a 1px QFrame filled with t.BORDER" in this
+# codebase - here, in settings_dialog._divider, and in primitives.Rule -
+# and the two local ones baked the colour into an inline stylesheet, which
+# made them precisely the two that stayed dark after a switch to the light
+# palette. Rule carries objectName "rule" and is coloured by the app
+# stylesheet, so it re-themes with everything else.
+from app.ui.components.primitives import Rule as _Rule
 
 
 class SectionHeader(QWidget):
-    def __init__(self, text: str, action: QWidget | None = None, parent=None):
+    def __init__(self, text: str, parent=None):
         super().__init__(parent)
         row = QHBoxLayout(self)
-        row.setContentsMargins(t.SPACE_MD, 0, t.SPACE_XS, 0)
-        row.setSpacing(t.SPACE_SM)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(t.SPACE_SM + 2)
 
         self._label = QLabel(text.upper())
-        self._label.setProperty("role", "overline")
-        self._label.setFont(t.make_font("overline"))
-        row.addWidget(self._label, alignment=Qt.AlignmentFlag.AlignVCenter)
-        row.addStretch(1)
-        if action is not None:
-            row.addWidget(action, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self._label.setFont(t.make_font("section_label"))
+        t.role(self._label, "tertiary")
+        row.addWidget(self._label, 0)
+        row.addWidget(_Rule(), 1)
 
     def setText(self, text: str) -> None:  # noqa: N802 (Qt naming convention)
         self._label.setText(text.upper())
 
 
 class DialogHeading(QWidget):
-    def __init__(self, text: str, subtitle: str = "", parent=None):
+    """A dialog's in-body title.
+
+    Type alone now: 20px semibold with a hair of negative tracking, which
+    at this size is what makes a heading look set rather than merely
+    enlarged. It is the only thing on its line, so it needs no help being
+    found.
+    """
+
+    def __init__(self, text: str, parent=None):
         super().__init__(parent)
-        col = QVBoxLayout(self)
-        col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(t.SPACE_2XS)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
 
         self._label = QLabel(text)
-        self._label.setFont(t.make_font("heading"))
-        col.addWidget(self._label)
-
-        self._subtitle = QLabel(subtitle)
-        self._subtitle.setProperty("tone", "secondary")
-        self._subtitle.setFont(t.make_font("body_sm"))
-        self._subtitle.setWordWrap(True)
-        self._subtitle.setVisible(bool(subtitle))
-        col.addWidget(self._subtitle)
+        self._label.setFont(t.make_font("dialog_heading"))
+        t.role(self._label, "primary")
+        row.addWidget(self._label)
+        row.addStretch(1)
 
     def setText(self, text: str) -> None:  # noqa: N802 (Qt naming convention)
         self._label.setText(text)
-
-    def set_subtitle(self, text: str) -> None:
-        self._subtitle.setText(text)
-        self._subtitle.setVisible(bool(text))

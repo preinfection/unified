@@ -95,9 +95,9 @@ def test_loading_placeholder_uses_app_theme_not_email_content_theme(view, captur
     app's own dark palette."""
     view.set_email_html("<p>irrelevant - not run yet</p>")
     color = view.grab().toImage().pixelColor(60, 60)
-    assert color.name() == t.BG_PANEL, (
-        f"loading placeholder should use the app's dark panel color "
-        f"({t.BG_PANEL}), got {color.name()}"
+    assert color.name() == t.BG_APP, (
+        f"loading placeholder should use the app's own dark floor color "
+        f"({t.BG_APP}), got {color.name()}"
     )
     # Now let the captured task actually run/deliver - only then should
     # the neutral light content theme take over.
@@ -113,7 +113,7 @@ def test_html_with_no_declared_colors_gets_a_neutral_light_default(qapp, view):
     theme."""
     color = _render_and_sample(qapp, view, "<p>Plain email, no styling at all.</p>")
     assert color.name() == "#ffffff"
-    assert color.name() != t.BG_PANEL
+    assert color.name() != t.BG_APP
 
 
 def test_explicit_light_email_theme_is_preserved(qapp, view):
@@ -136,7 +136,7 @@ def test_explicit_dark_email_theme_is_preserved_not_forced_to_app_palette(qapp, 
         '<p>Intentionally dark email.</p></body>',
     )
     assert color.name() == "#0a0a0a"
-    assert color.name() != t.BG_PANEL, "must be the EMAIL's own dark color, not the app's"
+    assert color.name() != t.BG_APP, "must be the EMAIL's own dark color, not the app's"
 
 
 def test_unfetched_remote_image_gets_a_neutral_placeholder_not_a_broken_icon(view, capturing_pool):
@@ -182,4 +182,4 @@ def test_switching_from_html_email_back_to_plain_text_restores_app_theme(qapp, v
     _render_and_sample(qapp, view, '<body style="background:#ffffff;"><p>hi</p></body>')
     view.set_email_text("Plain text body, no HTML.")
     color = view.grab().toImage().pixelColor(60, 60)
-    assert color.name() == t.BG_PANEL
+    assert color.name() == t.BG_APP

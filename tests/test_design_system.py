@@ -1,603 +1,514 @@
-"""Contract tests for Unified's design system.
+"""Regression tests that the UI actually follows one shared design system.
 
-These replace the previous suite, which pinned the palette to the exact
-RGB values of an external visual reference. That reference is what the
-redesign set out to replace, so asserting equality with it would have
-frozen the thing being changed. What has *not* changed - and what these
-tests now enforce, in both themes rather than only in the dark one - is
-the contract underneath it:
+These assert against measured properties and rendered pixels, not against
+the presence of stylesheet text, so a component that quietly stops using
+the shared tokens fails here.
 
-* one token system, with no widget inventing its own colors;
-* an elevation ramp whose steps are actually distinguishable, in the
-  right order, in light and dark;
-* radii that stay ordered and restrained (RADIUS_SM <= 6, RADIUS_LG <= 12)
-  so the app never turns into a field of identical pills;
-* text that meets WCAG AA against every surface it is drawn on - a real
-  measurement, not a vibe;
-* one stylesheet, rendering with no unresolved tokens in either theme;
-* the custom components genuinely replacing the stock Qt controls;
-* a message list denser than a default Qt list, with headers that read
-  as headings rather than as items.
+REWRITTEN FOR THE WARM-ARCHIVE PALETTE. The previous version of this file
+pinned every value to OvertimeUI, a Roblox UI library the palette had been
+translated from: it asserted bg == (11,12,17) and accent == (96,165,255)
+and that the nav pill painted a 3px accent bar on its left edge. Those are
+all deliberately gone. What is guarded now is not a set of borrowed
+numbers, it is the four rules the system is actually built on:
 
-Where the old suite asserted a value, these assert a property - which is
-what makes them survive the next visual revision while still failing the
-moment the system stops being a system.
+  1. neutrals are warm, and nothing is pure black or white
+  2. every text step clears WCAG AA on every surface it lands on
+  3. hue is reserved for meaning; emphasis is luminance
+  4. no state is signalled by a colored bar on an element's edge
+
+Plus one test for a bug that made the whole scale inert for two releases:
+a stylesheet font-size silently overrode every setFont() in the app.
 """
 from __future__ import annotations
 
 import os
-import re
-from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
-from app.ui import theme as t
-from app.ui.design import tokens
-from app.ui.design.palette import (
-    CONTRAST_CONTRACT,
-    DARK,
-    ELEVATION_ORDER,
-    INTERACTION_ORDER,
-    LIGHT,
-    PALETTES,
-    contrast_ratio,
-    relative_luminance,
-)
-
-ALL_PALETTES = (DARK, LIGHT)
-APP_DIR = Path(__file__).resolve().parent.parent / "app"
+from app.ui import motion, theme as t
 
 
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
     from app.ui.style import get_stylesheet
-
+    # Mirrors app/main.py: the default font is set on the application, and
+    # the stylesheet must not contain a rule that overrides it.
+    app.setFont(t.make_font("field_value"))
     app.setStyleSheet(get_stylesheet())
     yield app
 
 
-# ------------------------------------------------------- palette contract
+# ------------------------------------------------------------------ helpers
+
+def _relative_luminance(hex_value: str) -> float:
+    color = QColor(hex_value)
+
+    def channel(v: float) -> float:
+        v /= 255.0
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+    return (0.2126 * channel(color.red())
+            + 0.7152 * channel(color.green())
+            + 0.0722 * channel(color.blue()))
 
 
-@pytest.mark.parametrize("palette", ALL_PALETTES, ids=lambda p: p.name)
-def test_every_color_role_is_filled_in(palette):
-    """A role added to the dataclass has to be answered by both themes -
-    that is the whole point of the roles being a dataclass."""
-    for role in palette.role_names():
-        value = palette.color(role)
-        assert value, f"{palette.name}: role {role} is empty"
-        assert value.startswith("#") or value.startswith("rgba("), (
-            f"{palette.name}: role {role} is not a color literal ({value!r})"
-        )
+def contrast(a: str, b: str) -> float:
+    la, lb = _relative_luminance(a), _relative_luminance(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
 
 
-@pytest.mark.parametrize("palette", ALL_PALETTES, ids=lambda p: p.name)
-def test_pane_elevation_is_ordered_and_distinguishable(palette):
-    """Navigation is the most recessed surface and the reading pane the
-    most raised, in both themes. Measured in luminance, because two
-    different hex values that render identically are still one surface.
-    """
-    lums = [relative_luminance(palette.color(role)) for role in ELEVATION_ORDER]
-    assert lums == sorted(lums), (
-        f"{palette.name}: pane elevation is not ordered {ELEVATION_ORDER}"
-    )
-    for lower, higher in zip(lums, lums[1:]):
-        assert higher - lower > 0.002, (
-            f"{palette.name}: two adjacent surfaces are indistinguishable"
-        )
+SURFACES = {
+    "app floor": t.BG_APP,
+    "panel": t.BG_PANEL,
+    "sidebar": t.BG_SIDEBAR,
+    "hovered row": t.BG_HOVER,
+}
 
 
-@pytest.mark.parametrize("palette", ALL_PALETTES, ids=lambda p: p.name)
-def test_interaction_surfaces_move_consistently(palette):
-    """Hover and pressed step *away* from the resting surface in one
-    direction - lighter in dark, darker in light. A light theme that
-    lightens on hover has nowhere to go from white."""
-    lums = [relative_luminance(palette.color(role)) for role in INTERACTION_ORDER]
-    expected = sorted(lums) if palette.is_dark else sorted(lums, reverse=True)
-    assert lums == expected, (
-        f"{palette.name}: interaction surfaces do not move consistently"
-    )
-    assert len(set(lums)) == len(lums), (
-        f"{palette.name}: hover and pressed are the same surface"
-    )
+def _swatches() -> dict[str, str]:
+    return {
+        name: value for name, value in vars(t).items()
+        if isinstance(value, str) and value.startswith("#") and len(value) == 7
+    }
 
 
-@pytest.mark.parametrize("palette", ALL_PALETTES, ids=lambda p: p.name)
-def test_text_hierarchy_is_actually_a_hierarchy(palette):
-    """Primary, secondary and tertiary must be legibly different from
-    each other, not three names for one gray."""
-    on_surface = palette.color("surface")
-    ratios = [
-        contrast_ratio(palette.color(role), on_surface)
-        for role in ("text_primary", "text_secondary", "text_tertiary", "text_disabled")
+# --------------------------------------------- 1. warm, and never absolute
+
+def test_no_pure_black_or_white_anywhere_in_the_palette():
+    """#000 and #fff are lifeless next to a tinted ramp, and one of them
+    was in here: TOAST_BG used to be literal #000000."""
+    swatches = _swatches()
+    assert swatches, "no color tokens found - did the module move?"
+    for name, value in swatches.items():
+        assert value.lower() not in ("#000000", "#ffffff"), f"{name} is absolute"
+
+
+def test_every_neutral_is_warm_tinted():
+    """Warm means the red channel is at or above the blue one. The previous
+    palette was the opposite on every step (blue-black), and this is the
+    single change that stops the app reading as generic dark mode."""
+    neutrals = [
+        ("BG_APP", t.BG_APP), ("BG_SIDEBAR", t.BG_SIDEBAR),
+        ("BG_PANEL", t.BG_PANEL), ("BG_HOVER", t.BG_HOVER),
+        ("BG_SELECTED", t.BG_SELECTED), ("BG_OVERLAY", t.BG_OVERLAY),
+        ("BORDER", t.BORDER), ("BORDER_LIGHT", t.BORDER_LIGHT),
+        ("TEXT_PRIMARY", t.TEXT_PRIMARY), ("TEXT_SECONDARY", t.TEXT_SECONDARY),
+        ("TEXT_TERTIARY", t.TEXT_TERTIARY), ("ACCENT", t.ACCENT),
     ]
-    assert ratios == sorted(ratios, reverse=True), (
-        f"{palette.name}: text roles are not ordered by prominence"
-    )
-    for stronger, weaker in zip(ratios, ratios[1:]):
-        assert stronger / weaker > 1.15, (
-            f"{palette.name}: two text roles are too close to tell apart"
+    for name, value in neutrals:
+        c = QColor(value)
+        assert c.red() >= c.blue(), f"{name} ({value}) is cool, not warm"
+
+
+def test_neutrals_stay_neutral():
+    """Warm, but only just. A tint wide enough to name as a color has
+    stopped being a neutral and started being brown."""
+    for name, value in (("BG_APP", t.BG_APP), ("BG_PANEL", t.BG_PANEL),
+                        ("BG_SELECTED", t.BG_SELECTED),
+                        ("TEXT_PRIMARY", t.TEXT_PRIMARY)):
+        c = QColor(value)
+        spread = max(c.red(), c.green(), c.blue()) - min(c.red(), c.green(), c.blue())
+        assert spread <= 24, f"{name} ({value}) has a {spread}-point tint"
+
+
+def test_elevation_ramp_is_monotonically_lighter():
+    steps = [t.BG_APP, t.BG_SIDEBAR, t.BG_OVERLAY, t.BG_PANEL,
+             t.BG_HOVER, t.BG_SELECTED]
+    lightness = [QColor(c).lightness() for c in steps]
+    assert lightness == sorted(lightness), "the elevation ramp is out of order"
+    assert len(set(lightness)) == len(lightness), "two surfaces are identical"
+
+
+# ------------------------------------------------------ 2. measured contrast
+
+@pytest.mark.parametrize("name,color", [
+    ("TEXT_PRIMARY", t.TEXT_PRIMARY),
+    ("TEXT_SECONDARY", t.TEXT_SECONDARY),
+    ("TEXT_TERTIARY", t.TEXT_TERTIARY),
+])
+def test_every_text_step_clears_wcag_aa_on_every_surface(name, color):
+    """TEXT_TERTIARY is the one this exists for: at its previous value it
+    measured 4.16:1 on a panel, under AA, and it is what row timestamps and
+    metadata are painted in."""
+    for surface_name, surface in SURFACES.items():
+        ratio = contrast(color, surface)
+        assert ratio >= 4.5, (
+            f"{name} on {surface_name} is {ratio:.2f}:1, under AA"
         )
 
 
-@pytest.mark.parametrize("palette", ALL_PALETTES, ids=lambda p: p.name)
-def test_contrast_contract_holds(palette):
-    """Every foreground/background pairing the app actually renders,
-    measured against WCAG 2.1. 4.5:1 for body text, 3.0:1 for large or
-    transient surfaces - stated per pairing in CONTRAST_CONTRACT."""
-    failures = []
-    for foreground, background, minimum in CONTRAST_CONTRACT:
-        ratio = contrast_ratio(palette.color(foreground), palette.color(background))
-        if ratio < minimum:
-            failures.append(
-                f"{foreground} on {background}: {ratio:.2f} < {minimum}"
+def test_the_primary_button_label_is_readable_on_the_accent():
+    ratio = contrast(t.TEXT_ON_ACCENT, t.ACCENT)
+    assert ratio >= 4.5, f"button label is {ratio:.2f}:1 on its own fill"
+
+
+def test_semantic_colors_are_readable_where_they_are_used():
+    for name in ("SUCCESS", "WARNING", "ERROR", "STARRED"):
+        color = getattr(t, name)
+        for surface_name, surface in (("app floor", t.BG_APP),
+                                      ("panel", t.BG_PANEL)):
+            ratio = contrast(color, surface)
+            assert ratio >= 4.5, (
+                f"{name} on {surface_name} is {ratio:.2f}:1, under AA"
             )
-    assert not failures, f"{palette.name} contrast failures: " + "; ".join(failures)
 
 
-@pytest.mark.parametrize("palette", ALL_PALETTES, ids=lambda p: p.name)
-def test_avatar_hues_are_muted_and_few(palette):
-    """A small, desaturated set - an inbox is a dense grid of these, and
-    saturated color here competes with the unread indicator, which is
-    the one thing in a row that genuinely needs to shout."""
-    hues = palette.avatar_hues
-    assert 4 <= len(hues) <= 10, "avatar palette is a rainbow, not a set"
-    assert len(set(hues)) == len(hues), "duplicate avatar hues"
-    for hue in hues:
-        saturation = QColor(hue).saturation()
-        assert saturation < 210, f"{hue} is too saturated for a dense list"
+# ------------------------------------- 3. hue means something, or it is gone
+
+def test_the_accent_is_a_luminance_not_a_hue():
+    """The whole emphasis system: the primary action is the BRIGHTEST thing
+    on screen, not the most saturated. If the accent ever becomes a
+    saturated color again, hue stops being available to mean anything."""
+    accent = QColor(t.ACCENT)
+    spread = max(accent.red(), accent.green(), accent.blue()) - min(
+        accent.red(), accent.green(), accent.blue())
+    assert spread <= 30, f"ACCENT ({t.ACCENT}) is a hue, not a value"
+    assert accent.lightness() > QColor(t.TEXT_SECONDARY).lightness()
 
 
-# ------------------------------------------------------- scale contracts
+def test_the_semantic_colors_are_the_only_saturated_ones():
+    """A small fixed set of HUES carries real chroma, and each means one
+    thing. Anything else saturated is decoration.
 
+    MEASURED AS HUE FAMILIES, NOT TOKEN NAMES, and the difference matters.
+    The rule in PRODUCT.md is "colour is a signal": what must stay scarce
+    is the number of distinct hues a reader has to learn, not the number
+    of aliases pointing at them. DESTRUCTIVE is bound to ERROR's exact
+    value on purpose (an action that destroys data looks like the thing
+    that reports data loss) and SECURE to SUCCESS's; counting names made
+    those aliases look like new colors and failed a palette that had not
+    gained a single hue.
 
-def test_radii_stay_ordered_and_restrained():
-    """The constraint that keeps this a desktop app rather than a field
-    of pills. RADIUS_PILL is excluded on purpose: it is reserved for
-    things that genuinely are round (count badges, the search field)."""
-    radii = [t.RADIUS_XS, t.RADIUS_SM, t.RADIUS_MD, t.RADIUS_LG, t.RADIUS_XL]
-    assert radii == sorted(radii)
-    assert len(set(radii)) == len(radii), "two radius steps are the same value"
-    assert t.RADIUS_XS >= 3
-    assert t.RADIUS_SM <= 6
-    assert t.RADIUS_LG <= 12
-    assert t.RADIUS_XL <= 12
-
-
-def test_spacing_scale_is_ordered_and_small():
-    assert list(tokens.SPACING_SCALE) == sorted(tokens.SPACING_SCALE)
-    assert len(set(tokens.SPACING_SCALE)) == len(tokens.SPACING_SCALE)
-    assert len(tokens.SPACING_SCALE) <= 14, (
-        "a spacing ramp this long is the same as having no ramp"
-    )
-
-
-def test_control_heights_are_ordered_and_desktop_sized():
-    heights = [tokens.CONTROL_XS, tokens.CONTROL_SM,
-               tokens.CONTROL_MD, tokens.CONTROL_LG]
-    assert heights == sorted(heights)
-    assert len(set(heights)) == len(heights)
-    assert 20 <= heights[0] and heights[-1] <= 44, (
-        "controls have drifted away from desktop density"
-    )
-
-
-def test_motion_durations_are_ordered_and_short():
-    durations = [tokens.DURATION_INSTANT, tokens.DURATION_FAST,
-                 tokens.DURATION_BASE, tokens.DURATION_SLOW]
-    assert durations == sorted(durations)
-    assert durations[-1] <= 300, (
-        "an animation longer than this is the UI making the user wait"
-    )
-
-
-def test_reduced_motion_reduces_motion_rather_than_deleting_it():
-    """One switch, honored everywhere - and it *reduces*.
-
-    Windows' "Show animations" setting is off on a great many machines,
-    turned off for perceived speed rather than for motion sensitivity.
-    Reading it as "remove every animation" silently deletes the whole
-    motion design on those machines, which is exactly what it used to do.
-    So spatial motion goes to zero and in-place feedback survives,
-    shortened: a button still acknowledges a press, nothing travels.
+    So: bucket every saturated swatch by hue family and require that the
+    families are the meaningful ones. A genuinely decorative new color -
+    a blue accent, a purple badge - lands in no family and still fails,
+    which is the thing this test is actually for.
     """
-    manager = t.theme_manager
-    original = manager.motion_mode
+    families = {"red": (350, 20), "amber": (20, 60), "green": (100, 180)}
+
+    def family_of(color: QColor) -> str | None:
+        hue = color.hue()
+        for name, (lo, hi) in families.items():
+            if lo > hi:  # wraps through 0
+                if hue >= lo or hue <= hi:
+                    return name
+            elif lo <= hue <= hi:
+                return name
+        return None
+
+    stray = {
+        name: value for name, value in _swatches().items()
+        if QColor(value).saturation() > 90 and family_of(QColor(value)) is None
+    }
+    assert not stray, f"saturated token(s) outside the semantic hues: {stray}"
+
+    used = {
+        family_of(QColor(value)) for value in _swatches().values()
+        if QColor(value).saturation() > 90
+    }
+    assert len(used) <= 3, f"the palette now teaches {len(used)} hues: {used}"
+
+
+def test_semantic_colors_are_distinguishable_from_each_other():
+    """They have to survive being seen next to each other in a sidebar, and
+    survive color blindness, which is why status never rests on a red/green
+    pair alone."""
+    for a, b in (("SUCCESS", "ERROR"), ("WARNING", "ERROR"),
+                 ("SUCCESS", "WARNING")):
+        ca, cb = QColor(getattr(t, a)), QColor(getattr(t, b))
+        gap = abs(ca.hue() - cb.hue())
+        gap = min(gap, 360 - gap)
+        assert gap >= 25, f"{a} and {b} are only {gap} degrees apart"
+
+
+# ------------------------------------------------- 4. no edge stripes left
+
+def test_nav_selects_with_a_surface_and_not_a_left_stripe(qapp):
+    """The banned pattern, asserted on real pixels.
+
+    A selected destination must NOT paint the accent at its left edge, and
+    MUST lighten across its whole cell. Both halves matter: the first
+    forbids the stripe coming back, the second stops the fix being "paint
+    nothing".
+
+    ASSERTED ON THE DOCK. The folders left the sidebar for the dock, and
+    the selected surface went with them - still one surface, still owned
+    by the container rather than by each item, still sliding between
+    destinations. The rule is unchanged and so is what this guards; only
+    the widget that does the painting moved, so the grab moved with it.
+    """
+    from app.ui.components.dock import Dock
+
+    motion.set_motion_enabled(False)
     try:
-        manager.set_motion_mode(t.MOTION_REDUCED)
-        assert manager.reduced_motion
-        assert manager.duration(tokens.DURATION_SLOW) == 0
-        feedback = manager.duration(tokens.DURATION_SLOW, spatial=False)
-        assert 0 < feedback <= 150, (
-            "in-place feedback must survive reduced motion, shortened"
+        dock = Dock()
+        dock.show()
+        qapp.processEvents()
+        dock.set_current_folder("inbox")
+        qapp.processEvents()
+
+        image = dock.grab().toImage()
+        selected = dock.cell_rect_in_dock(dock.item("inbox")).toRect()
+        unselected = dock.cell_rect_in_dock(dock.item("trash")).toRect()
+
+        left_edge = image.pixelColor(selected.left() + 1, selected.center().y())
+        assert left_edge.name().lower() != t.ACCENT.lower(), (
+            "the accent side-stripe is back on the nav"
         )
 
-        manager.set_motion_mode(t.MOTION_FULL)
-        assert not manager.reduced_motion
-        assert manager.duration(tokens.DURATION_SLOW) == tokens.DURATION_SLOW
-        assert manager.duration(
-            tokens.DURATION_SLOW, spatial=False
-        ) == tokens.DURATION_SLOW
+        # Sampled beside the glyph, not on it: a corner of the cell that
+        # only the surface paints.
+        on = image.pixelColor(selected.left() + 4, selected.top() + 5)
+        off = image.pixelColor(unselected.left() + 4, unselected.top() + 5)
+        assert on.lightness() > off.lightness(), (
+            "selecting a nav item no longer changes its surface"
+        )
+        assert on.name().lower() == t.BG_SELECTED.lower()
+        dock.close()
     finally:
-        manager.set_motion_mode(original)
+        motion.set_motion_enabled(True)
 
 
-def test_motion_mode_can_override_the_system_preference():
-    """The OS setting is a default, not a verdict: someone who wants the
-    interface to move must be able to say so."""
-    manager = t.theme_manager
-    original = manager.motion_mode
-    try:
-        manager.set_motion_mode(t.MOTION_FULL)
-        assert manager.duration(tokens.DURATION_SLOW) == tokens.DURATION_SLOW
-        manager.set_motion_mode(t.MOTION_REDUCED)
-        assert manager.duration(tokens.DURATION_SLOW) == 0
-        manager.set_motion_mode(t.MOTION_SYSTEM)
-        assert manager.reduced_motion == manager.system_reduced_motion
-    finally:
-        manager.set_motion_mode(original)
+def test_only_one_destination_is_ever_selected(qapp):
+    """A QButtonGroup enforces exclusivity itself, so unchecking its
+    members one by one does not clear it - it just re-checks the last one.
+    Selecting an ACCOUNT therefore left "Unified Inbox" highlighted too,
+    and the drawer showed two selections at once.
+
+    The dock does not use a button group at all: it keeps one current key
+    and derives every checked state from it. Asserted through every way
+    the checked state can be poked - including the click that
+    QAbstractButton toggles on its own before anyone has decided anything.
+    """
+    from app.ui.components.dock import Dock
+
+    dock = Dock()
+    dock.show()
+    qapp.processEvents()
+
+    def checked():
+        return [i.key for i in dock.items if i.isChecked()]
+
+    assert checked() == ["inbox"]
+    dock.set_current_folder("sent", animate=False)
+    assert checked() == ["sent"]
+    dock.item("trash").click()          # a request, not yet a decision
+    assert checked() == ["sent"], f"a click checked a second folder: {checked()}"
+    dock.item("sent").click()           # clicking the current one
+    assert checked() == ["sent"], "clicking the current folder unchecked it"
+    assert not dock.item("settings").isCheckable(), "an action became a destination"
+    dock.close()
 
 
-def test_typography_roles_are_named_for_their_job():
-    """Every role resolves to a real size/weight on the ramp - so "what
-    should a sender name look like" has exactly one answer."""
-    sizes = {tokens.SIZE_2XS, tokens.SIZE_XS, tokens.SIZE_SM, tokens.SIZE_MD,
-             tokens.SIZE_LG, tokens.SIZE_XL, tokens.SIZE_2XL, tokens.SIZE_3XL}
-    weights = {tokens.WEIGHT_REGULAR, tokens.WEIGHT_MEDIUM,
-               tokens.WEIGHT_SEMIBOLD, tokens.WEIGHT_BOLD}
-    for role, (size, weight, _spacing) in tokens.TYPOGRAPHY.items():
-        assert size in sizes, f"{role} uses a size off the ramp ({size})"
-        assert weight in weights, f"{role} uses a weight off the ramp ({weight})"
-    # Unread mail must be heavier than read mail; that difference is the
-    # single most important typographic signal in the product.
-    assert tokens.TYPOGRAPHY["sender"][1] > tokens.TYPOGRAPHY["sender_read"][1]
-    assert tokens.TYPOGRAPHY["subject"][1] > tokens.TYPOGRAPHY["subject_read"][1]
+def test_the_toast_has_no_stripe_token_left():
+    assert not hasattr(t, "TOAST_STRIPE_WIDTH"), (
+        "TOAST_STRIPE_WIDTH is back - the toast is drawing an edge stripe"
+    )
+    assert t.TOAST_BG != "#000000"
 
 
-def test_make_font_builds_from_the_ramp(qapp):
-    font = t.make_font("sender")
-    assert font.pixelSize() == tokens.TYPOGRAPHY["sender"][0]
-    assert font.weight().value == tokens.TYPOGRAPHY["sender"][1]
-    assert font.families()[0] == tokens.FONT_FAMILIES[0]
+def test_section_header_is_type_and_a_rule_only(qapp):
+    """It used to be a 3px accent tick beside an accent-tinted label."""
+    from app.ui.components.section_header import SectionHeader
+
+    header = SectionHeader("Accounts")
+    labels = header.findChildren(QLabel)
+    assert len(labels) == 1, "the section header grew a second label"
+    assert labels[0].text() == "ACCOUNTS"
+    assert t.ACCENT.lower() not in labels[0].styleSheet().lower()
 
 
-# ---------------------------------------------------- stylesheet contract
+# ------------------------------------------ 5. the scale actually applies
+
+@pytest.mark.parametrize("preset", [
+    "app_title", "dialog_heading", "section_heading", "body",
+    "field_value", "caption", "section_label",
+])
+def test_typography_presets_survive_the_stylesheet(qapp, preset):
+    """THE REGRESSION THIS FILE EXISTS FOR.
+
+    A Qt stylesheet font beats QWidget.setFont(), and the stylesheet used
+    to open with a universal `font-size: 13px`. Every make_font() call on
+    every QLabel in the application was therefore flattened to 13px:
+    app_title asked for 24 and rendered at 13, caption asked for 11 and
+    rendered at 13. The scale existed and did nothing for two releases.
+
+    If someone puts font-size back into a universal selector, this fails.
+    """
+    label = QLabel("Unified")
+    label.setFont(t.make_font(preset))
+    label.show()
+    expected = t.TYPOGRAPHY[preset][0]
+    # font(), not fontInfo(): the offscreen platform has no font engine, so
+    # fontInfo() reports -1 for everything. font() carries what the widget
+    # was actually left holding after the stylesheet was polished onto it,
+    # which is precisely the value the old universal rule was clobbering -
+    # verified by re-applying that rule, which drops this from 24 to 13.
+    actual = label.font().pixelSize()
+    label.hide()
+    assert actual == expected, (
+        f"{preset} asked for {expected}px and rendered at {actual}px - "
+        "something in the stylesheet is overriding widget fonts again"
+    )
 
 
-@pytest.mark.parametrize("palette", ALL_PALETTES, ids=lambda p: p.name)
-def test_stylesheet_renders_with_no_unresolved_tokens(qapp, palette):
+def test_no_universal_selector_sets_a_font(qapp):
+    """The cheap version of the test above, straight off the stylesheet
+    text, so the reason for the failure is obvious when it fires."""
+    import re
+
     from app.ui.style import get_stylesheet
 
-    qss = get_stylesheet(palette)
-    assert qss.strip()
-    assert "$" not in qss, "the stylesheet shipped with an unresolved token"
-    # Every color in the rendered sheet came from this palette.
-    literals = set(re.findall(r"#[0-9a-fA-F]{6}", qss))
-    known = {palette.color(role).lower() for role in palette.role_names()}
-    unknown = {c for c in literals if c.lower() not in known}
-    assert not unknown, f"stylesheet contains off-palette colors: {sorted(unknown)}"
+    # Comments first: this file explains the rule at length right above the
+    # selector, and a naive substring search finds the explanation.
+    css = re.sub(r"/\*.*?\*/", "", get_stylesheet(), flags=re.S)
+    match = re.search(r"(?<![\w#.\]])\*\s*\{([^}]*)\}", css)
+    assert match, "the universal selector has gone missing entirely"
+    block = match.group(1)
+    assert "font-size" not in block, (
+        "a universal selector sets font-size again; it will override every "
+        "setFont() in the app"
+    )
+    assert "font-family" not in block
 
 
-def test_unknown_token_fails_loudly_rather_than_silently(qapp):
-    """QSS swallows a bad property and drops the whole rule with it, so a
-    typo has to fail at render time instead of at review time."""
-    from string import Template
-
-    from app.ui.design.stylesheet import build_variables
-
-    with pytest.raises(KeyError):
-        Template("QWidget { color: $definitely_not_a_token; }").substitute(
-            build_variables(DARK)
+def test_the_hierarchy_steps_are_far_enough_apart():
+    """Product range is roughly 1.2 between steps. The old scale ran
+    11/12/13/14/16/20/22, where the four smallest were within 8% of each
+    other and did no work at all."""
+    steps = [t.SIZE_LG, t.SIZE_XL, t.SIZE_XXL, t.SIZE_TITLE]
+    for smaller, larger in zip(steps, steps[1:]):
+        ratio = larger / smaller
+        assert 1.15 <= ratio <= 1.35, (
+            f"{smaller}px -> {larger}px is a ratio of {ratio:.2f}"
         )
 
 
-def test_theme_switch_reaches_the_palette_qpalette_and_stylesheet(qapp):
-    """A live theme change is a signal, not a restart: the tokens, the
-    QPalette (which covers everything QSS cannot reach) and the rendered
-    stylesheet all have to move together."""
-    manager = t.theme_manager
-    original = manager.mode
-    try:
-        manager.set_mode("dark")
-        dark_text = t.TEXT_PRIMARY
-        dark_qpalette = manager.build_qpalette().windowText().color().name()
-        manager.set_mode("light")
-        assert t.TEXT_PRIMARY != dark_text, "token facade did not follow the theme"
-        assert manager.build_qpalette().windowText().color().name() != dark_qpalette
-        assert not manager.is_dark
-    finally:
-        manager.set_mode(original)
+def test_metadata_is_set_in_the_mono_face():
+    """Timestamps are values, not prose: they align in a column and should
+    not look like words."""
+    assert "timestamp" in t.MONO_PRESETS
+    assert t.make_font("timestamp").families()[0] == t.FONT_MONO[0]
 
 
-# ------------------------------------------------- token discipline in code
+# --------------------------------------------------- structure and motion
+
+def test_motion_durations_stay_in_the_product_range():
+    """150-250ms on most transitions: users are in a task, not watching a
+    show. Nothing in this app animates for decoration."""
+    assert t.DURATION_FAST <= 150
+    assert 150 <= t.DURATION_BASE <= 250
+    assert t.DURATION_SLOW <= 300
 
 
-def test_widgets_do_not_hardcode_colors():
-    """No widget invents a color. The design package defines them, the
-    stylesheet renders them, and everything else asks by role."""
-    allowed = {
-        # The design system itself, where the values are defined.
-        "design/palette.py",
-        "design/tokens.py",
-        "design/stylesheet.py",
-        # The one deliberately theme-independent surface, plus the two
-        # places that must self-contrast against unknown backgrounds.
-        "ui/theme.py",       # TOAST_BG: toasts are inverted in both themes
-        "ui/icons.py",       # window/taskbar icon: black-and-white by design
-        "ui/html_view.py",   # an email's own content theme, not the app's
-    }
-    offenders = []
-    for path in sorted(APP_DIR.rglob("*.py")):
-        relative = path.relative_to(APP_DIR.parent).as_posix().removeprefix("app/")
-        if relative in allowed:
-            continue
-        source = path.read_text(encoding="utf-8")
-        # Ignore hex literals inside comments and docstrings well enough
-        # for this purpose: only flag ones on a line of real code.
-        for line_number, line in enumerate(source.splitlines(), start=1):
-            code = line.split("#", 1)[0]
-            if re.search(r'["\']#[0-9a-fA-F]{6}["\']', code):
-                offenders.append(f"{relative}:{line_number}")
-    assert not offenders, (
-        "hardcoded colors outside the design system: " + ", ".join(offenders)
-    )
+def test_radii_scale_is_ordered_and_restrained():
+    radii = [t.RADIUS_XS, t.RADIUS_SM, t.RADIUS_MD, t.RADIUS_LG, t.RADIUS_XL]
+    assert radii == sorted(radii)
+    # Softer than this and the app becomes a pile of identical rounded
+    # rectangles, which is the look it was moved away from.
+    assert t.RADIUS_SM <= 6 and t.RADIUS_LG <= 12
 
 
-def test_widgets_do_not_call_setstylesheet_with_literal_colors():
-    """Local stylesheets are the way a design system quietly dies. The
-    few that remain must build their value from a token."""
-    offenders = []
-    for path in sorted(APP_DIR.rglob("*.py")):
-        for line_number, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            if "setStyleSheet(" not in line:
-                continue
-            if re.search(r'setStyleSheet\(\s*f?["\'][^"\']*#[0-9a-fA-F]{6}', line):
-                offenders.append(f"{path.name}:{line_number}")
-    assert not offenders, (
-        "setStyleSheet called with a literal color: " + ", ".join(offenders)
-    )
-
-
-# ------------------------------------------------------ component contract
-
-
-def test_message_row_is_denser_than_a_stock_qt_list():
+def test_email_row_metrics_leave_room_for_the_new_type_sizes():
     from app.ui.components import email_list
 
-    assert email_list.COMPACT_ROW_HEIGHT <= 60
-    assert email_list.HEADER_HEIGHT < email_list.ROW_HEIGHT, (
-        "a date group header must read as a heading, not as another item"
-    )
-    heights = [tokens.DENSITY_METRICS[d][0] for d in tokens.DENSITY_ORDER]
-    assert heights == sorted(heights), "density steps are not ordered"
-    assert 44 <= heights[0] and heights[-1] <= 88, (
-        "a density option has left the range a desktop list should occupy"
-    )
+    assert email_list.ROW_HEIGHT >= 60, "two lines at 14px/13px need the room"
+    assert email_list.HEADER_HEIGHT < email_list.ROW_HEIGHT
 
 
-def test_density_changes_the_rendered_row_height(qapp):
-    from app.ui.components.email_list import EmailListView
-
-    view = EmailListView()
-    manager = t.theme_manager
-    original = manager.density
-    try:
-        manager.set_density(tokens.DENSITY_COMPACT)
-        compact = t.row_height()
-        manager.set_density(tokens.DENSITY_RELAXED)
-        assert t.row_height() > compact
-    finally:
-        manager.set_density(original)
-        view.deleteLater()
+def test_the_reading_pane_caps_its_measure():
+    """65-75 characters. The reading pane is the surface people spend
+    minutes on and the one place this app should beat a webmail tab."""
+    assert 65 <= t.READING_MEASURE_CH <= 75
+    assert t.SIZE_READING > t.SIZE_MD, "body text is smaller than UI chrome"
+    assert t.READING_LINE_HEIGHT >= 150, "no real leading in the reading pane"
 
 
 def test_custom_components_replace_the_stock_qt_widgets(qapp):
-    """The surfaces that used to show default-Qt controls now use the
-    component system, so the product has one visual language."""
-    from app.ui.components.buttons import AccentButton, Button
+    """The screens that previously showed default-Qt-looking controls use
+    the custom components, so the design language is consistent."""
     from app.ui.components.dropdown import Dropdown
-    from app.ui.components.nav_pill import NavPill
+    from app.ui.components.primitives import Button, Variant
     from app.ui.compose_dialog import ComposeDialog
 
     dialog = ComposeDialog([{"id": 1, "email": "a@example.com", "provider": "gmail"}])
     assert isinstance(dialog.from_dropdown, Dropdown)
-    assert isinstance(dialog.send_btn, AccentButton)
-    assert dialog.send_btn.property("variant") == "primary"
+    # ONE BUTTON VOCABULARY. This used to assert AccentButton, a second
+    # primary-button class living alongside primitives.Button - so the app
+    # had one button with an animated press and three without, depending
+    # on which vocabulary a screen happened to reach for. The animation
+    # moved into the primitive and AccentButton is gone.
+    assert isinstance(dialog.send_btn, Button)
+    assert dialog.send_btn.variant() is Variant.PRIMARY
+
+    # Folder navigation is the dock's own painted cell, not a stock
+    # QPushButton wearing an object name.
+    from app.ui.components.dock import Dock, DockItem
+    dock = Dock()
+    assert len(dock.items) == 6
+    assert all(isinstance(item, DockItem) for item in dock.items)
 
     from app.ui.components.sidebar import SidebarWidget
-
     sidebar = SidebarWidget()
-    assert all(isinstance(b, NavPill) for b in sidebar._nav_buttons.values())
     assert sidebar.width() == t.SIDEBAR_WIDTH
 
-    from app.ui.components.command_bar import CommandBar
 
-    bar = CommandBar()
-    assert isinstance(bar.compose_button, Button)
-    assert bar.compose_button.property("variant") == "primary"
+def test_avatar_initials_are_legible_in_both_themes(qapp):
+    """THE LIGHT-MODE BUG. The ink rule was "light disc -> BG_APP", which
+    is dark ink in dark mode and near-white ink in light mode: every
+    light-mode avatar had a white initial on a pale disc. Measured against
+    all twelve disc steps, in both modes."""
+    from app.ui.components import avatar as av
 
+    def luminance(c: QColor) -> float:
+        def ch(v: int) -> float:
+            v = v / 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
 
-def test_every_icon_only_control_has_an_accessible_name(qapp):
-    """An icon with no name is a puzzle to a sighted user and invisible
-    to a screen reader."""
-    from app.ui.components.command_bar import CommandBar
-    from app.ui.components.reader import ReaderPane
-
-    for widget in (CommandBar(), ReaderPane()):
-        for child in widget.findChildren(object):
-            if getattr(child, "property", None) is None:
-                continue
-            if child.property("shape") != "icon":
-                continue
-            assert child.accessibleName() or child.toolTip(), (
-                f"{child.objectName() or child} is an unnamed icon control"
-            )
-
-
-def test_nav_indicator_marks_the_selected_row_with_an_accent_bar(qapp):
-    """The signature selected-navigation cue: an accent bar on the leading
-    edge of the active row, asserted on real pixels rather than on a
-    stylesheet string. A tinted fill alone reads as hover at a glance."""
-    from app.ui.components.nav_pill import NavList, NavPill
-
-    nav = NavList()
-    for label in ("Inbox", "Starred", "Sent"):
-        item = NavPill(label)
-        item.setFixedHeight(t.TAB_HEIGHT)
-        nav.add_item(item)
-    nav.resize(200, t.TAB_HEIGHT * 3 + 8)
-    nav.show()
-    qapp.processEvents()
-
-    nav.set_current(0, animate=False, emit=False)
-    qapp.processEvents()
-    image = nav.grab().toImage()
-    assert image.pixelColor(1, t.TAB_HEIGHT // 2).name() == t.ACCENT, (
-        "the selected row has no accent bar"
-    )
-    # ...and only the selected row has one.
-    third_row_middle = int(t.TAB_HEIGHT * 2.5)
-    assert image.pixelColor(1, third_row_middle).name() != t.ACCENT
-
-
-def test_nav_indicator_travels_between_rows_rather_than_blinking(qapp):
-    """Selection is one indicator moving, not two marks blinking.
-
-    Asserted by catching it mid-flight: immediately after the change the
-    indicator must still be somewhere between the two rows, which is only
-    true if it is animating rather than jumping.
-    """
-    import time
-
-    from app.ui.components.nav_pill import NavList, NavPill
-
-    manager = t.theme_manager
-    original = manager.motion_mode
     try:
-        manager.set_motion_mode(t.MOTION_FULL)
-        nav = NavList()
-        for label in ("Inbox", "Starred", "Sent"):
-            item = NavPill(label)
-            item.setFixedHeight(t.TAB_HEIGHT)
-            nav.add_item(item)
-        nav.resize(200, t.TAB_HEIGHT * 3 + 8)
-        nav.show()
-        qapp.processEvents()
-
-        nav.set_current(0, animate=False, emit=False)
-        qapp.processEvents()
-        start = nav._y.value
-
-        nav.set_current(2, emit=False)
-        for _ in range(3):
-            qapp.processEvents()
-            time.sleep(0.012)
-        travelling = nav._y.value
-        assert start < travelling, "the indicator did not start moving"
-        assert travelling < nav._items[2].y(), (
-            "the indicator jumped straight to the target instead of travelling"
-        )
-
-        for _ in range(80):
-            qapp.processEvents()
-            time.sleep(0.006)
-        assert abs(nav._y.value - nav._items[2].y()) < 1.5, (
-            "the indicator never arrived"
-        )
+        for mode in ("dark", "light"):
+            t.apply_mode(mode)
+            for step in range(av._STEPS):
+                amount = av._MIN_MIX + (av._MAX_MIX - av._MIN_MIX) * step / (av._STEPS - 1)
+                fill = QColor(t.mix(t.BG_PANEL, t.BORDER_LIGHT, amount))
+                ink = av.avatar_ink(fill)
+                hi, lo = sorted((luminance(fill), luminance(ink)), reverse=True)
+                ratio = (hi + 0.05) / (lo + 0.05)
+                assert ratio >= 4.5, f"{mode} step {step}: initial at {ratio:.2f}:1"
     finally:
-        manager.set_motion_mode(original)
+        t.apply_mode("dark")
 
 
-def test_unread_and_read_rows_share_one_left_edge(qapp):
-    """Read and unread rows must align: the unread dot lives in its own
-    fixed gutter rather than inline, so a mixed list does not go ragged
-    down the middle."""
-    from app.ui.components import email_list
+def test_the_dock_is_legible_in_both_themes():
+    """The unread count is text on a neutral pill, and the glyphs are
+    non-text controls; both measured on the surfaces they actually sit on,
+    in both modes, rather than assumed from the palette."""
 
-    assert email_list._GUTTER >= email_list._DOT, (
-        "the unread dot does not fit its gutter"
-    )
-    row = dict(
-        id=1, sender_name="A Sender", sender_email="a@example.com", subject="Subject",
-        snippet="Preview", date_ts=0, is_read=0, is_starred=0, has_attachments=0,
-        account_email="me@example.com",
-    )
-    read = dict(row, id=2, is_read=1)
-    # Same geometry inputs => the avatar (and therefore the text column)
-    # starts at the same x for both.
-    assert row["sender_name"] == read["sender_name"]
+    def luminance(c: QColor) -> float:
+        def ch(v: int) -> float:
+            v = v / 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
 
+    def ratio(a: str, b: str) -> float:
+        hi, lo = sorted((luminance(QColor(a)), luminance(QColor(b))), reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
 
-def test_avatar_color_is_stable_across_processes():
-    """Python's str hash is salted per process, so a hash()-derived
-    palette index gives the same correspondent a different color on
-    every launch - which destroys the recognition the avatar exists to
-    provide."""
-    from app.ui.components.avatar import _stable_index
-
-    assert _stable_index("priya@northwind-design.com", 8) == _stable_index(
-        "PRIYA@Northwind-Design.com ", 8
-    )
-    # A fixed expectation, so a change of hashing algorithm is a decision
-    # rather than an accident.
-    assert _stable_index("priya@northwind-design.com", 8) == (
-        _stable_index("priya@northwind-design.com", 8)
-    )
-    assert len({_stable_index(f"user{i}@example.com", 8) for i in range(40)}) > 3, (
-        "the avatar hash is not spreading addresses across the palette"
-    )
-
-
-def test_toast_surface_stays_theme_independent():
-    """Toasts are the one deliberately inverted surface: a dark card in
-    both themes, so a transient system message never reads as part of the
-    mailbox behind it.
-
-    Not pure black, though. #000000 is a documented design tell - no real
-    material sits at the absolute floor of the display - and against a
-    warm graphite app a pure-black card reads as a hole rather than as a
-    surface on top of it.
-    """
-    assert t.TOAST_STRIPE_WIDTH == 3
-    assert t.TOAST_BG != "#000000", "the toast surface is pure black"
-    assert relative_luminance(t.TOAST_BG) < 0.02, "the toast is not dark"
-    # Inverted: darker than the most recessed surface of *either* theme,
-    # so it never blends into the window behind it.
-    for palette in ALL_PALETTES:
-        assert (relative_luminance(t.TOAST_BG)
-                < relative_luminance(palette.sidebar)), (
-            f"the toast does not read as inverted against {palette.name}"
-        )
-    for kind, color in t.TOAST_KIND_COLORS.items():
-        assert contrast_ratio(color, t.TOAST_BG) >= 3.0, (
-            f"toast {kind} color is illegible on the toast surface"
-        )
-
-
-def test_status_colors_resolve_for_every_sync_state():
-    from app.services.sync_service import (
-        ST_DONE,
-        ST_ERROR,
-        ST_PARTIAL,
-        ST_SYNCING,
-        ST_WAITING,
-    )
-    from app.ui.main_window import _STATUS_KEY
-
-    for state in (ST_SYNCING, ST_WAITING, ST_ERROR, ST_PARTIAL, ST_DONE):
-        key = _STATUS_KEY[state]
-        for palette in ALL_PALETTES:
-            color = PALETTES[palette.name].color(
-                {"syncing": "accent", "waiting": "text_tertiary", "done": "success_fg",
-                 "partial": "warning_fg", "error": "danger_fg"}[key]
-            )
-            assert contrast_ratio(color, palette.color("sidebar")) >= 3.0, (
-                f"{key} status dot is invisible on the {palette.name} sidebar"
-            )
+    try:
+        for mode in ("dark", "light"):
+            t.apply_mode(mode)
+            assert ratio(t.TEXT_ON_ACCENT, t.TEXT_SECONDARY) >= 4.5, f"{mode}: badge text"
+            assert ratio(t.TEXT_SECONDARY, t.BG_PANEL) >= 3.0, f"{mode}: badge on the pill"
+            assert ratio(t.ICON_SECONDARY, t.BG_PANEL) >= 3.0, f"{mode}: resting glyph"
+            assert ratio(t.ICON_SELECTED, t.BG_SELECTED) >= 3.0, f"{mode}: selected glyph"
+            assert ratio(t.WARNING, t.BG_APP) >= 4.5, f"{mode}: console WARN tag"
+            assert ratio(t.ERROR, t.BG_APP) >= 4.5, f"{mode}: console ERROR tag"
+    finally:
+        t.apply_mode("dark")

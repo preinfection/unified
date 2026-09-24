@@ -59,16 +59,27 @@ def window(qapp):
     yield win
 
 
-def _is_backdrop(color: QColor) -> bool:
-    """Magenta-ish => the backdrop is showing through.
+def _kind_pixels(image, geo, kind_hex: str) -> int:
+    """How many pixels in the card's title row carry the kind color.
 
-    The thresholds have to be tight enough to mean *magenta* and not
-    merely "some red and blue": a dark neutral like the surface border
-    (#2a2d35) has red and blue above 40 with green below 60 and would
-    otherwise be reported as bleed-through, which is how this check
-    fails on an opaque toast that is working perfectly.
+    The dot is antialiased, so an exact-match scan of one pixel is
+    unreliable; this counts near-matches across the row instead.
     """
-    return color.red() > 150 and color.blue() > 150 and color.green() < 100
+    want = QColor(kind_hex)
+    hits = 0
+    for dy in range(4, min(geo.height(), 40)):
+        for dx in range(4, min(geo.width(), 40)):
+            c = image.pixelColor(geo.x() + dx, geo.y() + dy)
+            if (abs(c.red() - want.red()) <= 12
+                    and abs(c.green() - want.green()) <= 12
+                    and abs(c.blue() - want.blue()) <= 12):
+                hits += 1
+    return hits
+
+
+def _is_backdrop(color: QColor) -> bool:
+    """Magenta-ish => the backdrop is showing through."""
+    return color.red() > 40 and color.blue() > 40 and color.green() < 60
 
 
 def test_toast_surface_is_fully_opaque(qapp, window):
@@ -80,40 +91,49 @@ def test_toast_surface_is_fully_opaque(qapp, window):
 
     bleed = []
     for dy in range(6, geo.height() - 6, 4):
-        for dx in range(t.TOAST_STRIPE_WIDTH + 4, geo.width() - 6, 8):
+        for dx in range(8, geo.width() - 6, 8):
             color = image.pixelColor(geo.x() + dx, geo.y() + dy)
             if _is_backdrop(color):
                 bleed.append((dx, dy, color.name()))
     assert not bleed, f"backdrop bled through the toast surface at {bleed[:5]}"
 
 
-def test_toast_surface_is_the_inverted_toast_color(qapp, window):
-    """The card paints the toast surface itself.
-
-    The assertion is against `t.TOAST_BG` rather than a literal, because
-    the surface is a near-black by design and not pure #000000 - see
-    test_design_system.test_toast_surface_stays_theme_independent for the
-    contract that value has to meet. What matters here is that the card
-    actually paints it.
-    """
+def test_toast_surface_is_the_overlay_step_and_not_absolute_black(qapp, window):
+    """It used to be literal #000000. Nothing in this palette is absolute:
+    a pure-black card on a warm near-black app reads as a hole punched in
+    the window rather than as a surface floating above it."""
     host, image = _settled(
         qapp, window, ("Sync complete", "3 new messages", "success")
     )
     geo = host._toasts[0].geometry()
-    # Well inside the card, clear of the stripe, border and any text.
+    # Well inside the card, clear of the border and any text.
     color = image.pixelColor(geo.x() + geo.width() - 20, geo.y() + 10)
     assert color.name() == t.TOAST_BG
+    assert t.TOAST_BG != "#000000"
 
 
-def test_accent_stripe_survives_the_repaint(qapp, window):
-    """The stripe is painted in paintEvent now (not a child widget) - it
-    must still be there, in the toast kind's color."""
+def test_the_kind_is_a_dot_beside_the_title_not_a_left_stripe(qapp, window):
+    """The toast used to carry a 3px colored bar down its left edge.
+
+    A colored side-stripe is decoration standing in for meaning, and it put
+    the only hue on the card where it was least likely to be read. Two
+    things are asserted: the left edge is NOT the kind color any more, and
+    the kind color is still present somewhere in the card's title row, as a
+    shape beside the words.
+    """
     host, image = _settled(
         qapp, window, ("Sync complete", "done", "success")
     )
     geo = host._toasts[0].geometry()
-    stripe = image.pixelColor(geo.x() + 1, geo.y() + geo.height() // 2)
-    assert stripe.name() == t.TOAST_KIND_COLORS["success"]
+    kind = t.TOAST_KIND_COLORS["success"]
+
+    edge = image.pixelColor(geo.x() + 1, geo.y() + geo.height() // 2)
+    assert edge.name() != kind, "the accent side-stripe is back on the toast"
+
+    assert _kind_pixels(image, geo, kind), (
+        "the kind color is not on the card at all - the signal was removed "
+        "rather than moved"
+    )
 
 
 def test_stacked_toasts_remain_visually_separated(qapp, window):
@@ -125,11 +145,10 @@ def test_stacked_toasts_remain_visually_separated(qapp, window):
     assert len(host._toasts) == 2
     first, second = host._toasts[0].geometry(), host._toasts[1].geometry()
     assert second.y() > first.y() + first.height(), "toasts overlap"
-    # Each carries its own kind color, so they aren't one merged block.
-    c1 = image.pixelColor(first.x() + 1, first.y() + first.height() // 2)
-    c2 = image.pixelColor(second.x() + 1, second.y() + second.height() // 2)
-    assert c1.name() == t.TOAST_KIND_COLORS["success"]
-    assert c2.name() == t.TOAST_KIND_COLORS["error"]
+    # Each still carries its own kind color, so they aren't one merged
+    # block - now as a dot in the title row rather than an edge stripe.
+    assert _kind_pixels(image, first, t.TOAST_KIND_COLORS["success"])
+    assert _kind_pixels(image, second, t.TOAST_KIND_COLORS["error"])
 
 
 def test_rounded_corner_is_not_painted_square(qapp, window):

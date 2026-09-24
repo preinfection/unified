@@ -1,245 +1,333 @@
-"""The window shown while the app opens.
+"""The surface Unified opens on, and hands over to.
 
-Opening Unified is not instant: it migrates a legacy install if there is
-one, decrypts the local mailbox (AES-256-GCM, and a large cache on a slow
-disk is real work), opens the database, and runs its integrity check. All
-of that used to happen before any window appeared, so the app looked
-frozen for however long it took. This appears the moment QApplication
-exists and has no dependency on the database, the settings or any account
-data.
+WHY THIS WINDOW EXISTS AT ALL. The real startup steps - legacy
+migration, the AES-256-GCM decrypt of the local mailbox, opening the
+database - take real time on a large cache and a slow disk, and they all
+used to run before any window appeared. The app looked frozen for
+however long that took. app/main.py runs them on a background thread and
+reports each one here; nothing in this file is a timer pretending to be
+progress.
 
-What it is, and why:
+=========================================================================
+IT IS MAXIMIZED, AND THAT IS THE WHOLE TRANSITION
 
-* **A frameless card, not a small window.** A splash with an OS title bar,
-  a caption and a close button reads as an application window that has
-  not finished drawing. A rounded, shadowed card centred on screen reads
-  as the product arriving. It paints itself, because Qt does not
-  anti-alias a stylesheet's `border-radius` and a splash with stepped
-  corners is worse than no splash.
-* **Named steps, not a barber pole.** The startup sequence has four known
-  stages, so the progress is a real fraction - four of four - rather than
-  an indeterminate bar that says only "something is happening". The label
-  says which stage in words.
-* **The stage text swaps rather than blinks.** Same 150ms in-place swap
-  the rest of the app uses when a line of text changes, so four stages in
-  quick succession read as one line updating instead of as flicker.
-* **Nothing is faked.** The fraction advances when `app/main.py` reports a
-  step that has actually completed. There is no timer pretending to make
-  progress.
+This was a 340x220 card in the middle of the screen, and the main window
+was 1280x800. Startup therefore ended with a small box vanishing and a
+differently shaped window appearing somewhere else - two unrelated
+events, which is exactly the "a Qt window appeared and then suddenly
+changed" feeling rather than "Unified is opening".
+
+So this window opens maximized, on the app floor, with a normal frame -
+the same geometry, the same background and the same title bar the shell
+is about to occupy. The shell is then shown maximized BEHIND it and this
+layer fades out. Nothing moves and nothing resizes: one surface resolves
+into another. That fade IS the reveal, which is also why the shell
+underneath does not run a second animation of its own - a tween playing
+beneath a fading layer is invisible work that costs frames during the
+one moment the app is trying to look immediate.
+
+WHAT IS ON IT. The wordmark, the product's one standing claim
+("Encrypted locally"), the opening bar, and a line naming the step that
+is actually running. Centred, quiet, and no larger than it needs to be:
+a maximized surface is a lot of room, and filling it would be the
+opposite of the restraint the rest of the product is built on.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from app import APP_NAME, __version__
-from app.ui import theme as t
-from app.ui.design import motion
-from app.ui.design.motion import ValueAnimator, blend
-from app.ui.icons import make_app_icon, make_mark
+from app import APP_NAME
+from app.ui import motion, theme as t
+from app.ui.components.globe import DottedGlobe
+from app.ui.components.opening_bar import OpeningBar
+from app.ui.icons import make_app_icon
+from app.ui.native_theme import apply_dark_titlebar
+from app.ui.svg_icon import simple_icon
 
-# The startup sequence, in order. `app/main.py` reports each one as it
-# completes; the labels live here so the window owns its own copy.
-STAGES = (
-    "Checking your install",
-    "Unlocking your mailbox",
-    "Opening the local cache",
-    "Preparing your mailbox",
-)
+# A floor, for a font fallback narrow enough to make the block look like
+# a fragment. The real width is measured from the content - see
+# _mark_width - so the bar underlines the identity exactly rather than
+# being set to a number somebody liked.
+_MIN_MARK_WIDTH = 168
 
-_CARD_WIDTH = 380
-_CARD_HEIGHT = 250
-_SHADOW = 28          # room around the card for its drop shadow
-_MARK = 44
-_TRACK_WIDTH = 220
-_TRACK_HEIGHT = 3
+# The caption that sits under the bar, measured with it so the block has
+# one right edge instead of a ragged one.
+_CAPTION = "Encrypted locally"
+_LOCK_SIZE = 12
+
+# The beat between the globe appearing and the name following it. Short:
+# on most machines the whole opening is over within a second, and the
+# name must be up well before the shell replaces it.
+IDENTITY_DELAY_MS = 140
+
+
+def _mark_width() -> int:
+    """How wide the identity block is, measured rather than chosen.
+
+    The opening bar spans this, which makes it an underline for the whole
+    mark - wordmark and claim together - instead of a bar that happens to
+    sit near them. Measured at runtime because the resolved face depends
+    on what Windows actually has (Segoe UI Variable, Segoe UI, Arial) and
+    on the display scale, and a hard-coded width would be right on one
+    machine and ragged on the next.
+    """
+    title = QFontMetrics(t.make_font("app_title")).horizontalAdvance(APP_NAME)
+    caption = (
+        _LOCK_SIZE + t.SPACE_XS + 2
+        + QFontMetrics(t.make_font("caption")).horizontalAdvance(_CAPTION)
+    )
+    return max(_MIN_MARK_WIDTH, title, caption)
 
 
 class StartupWindow(QWidget):
+    #: Fractions the bar has genuinely earned by the time each stage
+    #: BEGINS, keyed by the stage text app/main.py emits - so the two
+    #: cannot drift apart silently. An unknown stage simply does not move
+    #: the bar, rather than moving it somewhere invented.
+    STAGE_PROGRESS = {
+        "Checking install...": 0.12,
+        "Unlocking encrypted mailbox...": 0.38,
+        "Loading local cache...": 0.64,
+        "Preparing mailbox...": 0.86,
+    }
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(make_app_icon())
-        # Frameless and translucent so the card can have real rounded
-        # corners and a shadow instead of sitting inside a square window.
-        self.setWindowFlags(
-            Qt.WindowType.SplashScreen
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.setFixedSize(_CARD_WIDTH + _SHADOW * 2, _CARD_HEIGHT + _SHADOW * 2)
+        # THE USER CAN CLOSE THIS, AND IT BECAME MUCH EASIER TO. As a
+        # 340x220 card almost nobody hit its X; as a maximized window with
+        # a full title bar, closing it is an obvious thing to try while
+        # waiting. Every public method below therefore checks this first,
+        # because WA_DeleteOnClose destroys the C++ object and the
+        # background init thread has no idea that happened - it calls
+        # set_stage() a moment later and takes the whole process down with
+        # "Internal C++ object already deleted".
+        self._closed = False
+        self._handing_over = False
+        # A bare top-level QWidget is not covered by style.py's
+        # QMainWindow/QDialog background rule, so it states its own or
+        # risks painting as opaque black.
+        self.setStyleSheet(f"background: {t.BG_APP};")
+        apply_dark_titlebar(self, dark=t.is_dark())
 
-        self._stage = 0
-        self._label = "Starting Unified"
-        self._previous_label = ""
+        root = QVBoxLayout(self)
+        root.setContentsMargins(t.SPACE_XXL, t.SPACE_XXL, t.SPACE_XXL, t.SPACE_XXL)
+        root.setSpacing(0)
+        # 5:6 rather than centred: the optical centre of a large empty
+        # surface sits slightly above the true one, and EmptyState uses
+        # the same ratio, so the two agree about where "middle" is.
+        root.addStretch(5)
 
-        # The progress fill, and the in-place swap of the stage text.
-        self._progress = ValueAnimator(self, 0.0, motion.DURATION_SLOW,
-                                       motion.EASE_SMOOTH_OUT)
-        self._swap = ValueAnimator(self, 0.0, motion.TEXT_SWAP,
-                                   motion.EASE_IN_OUT, spatial=False)
-        # The card settles in rather than appearing. Pure opacity, so it
-        # survives reduced motion in shortened form.
-        self._entrance = ValueAnimator(self, 1.0, motion.DURATION_MEDIUM,
-                                       motion.EASE_SMOOTH_OUT, spatial=False)
-        self._entrance.to(0.0)
+        # THE GLOBE COMES FIRST, THEN THE NAME. Adapted from Magic UI's
+        # Globe (see components/globe.py): many points turning as one
+        # sphere, which is what this product is - several accounts held as
+        # one - and it arrives a beat before the wordmark so the opening
+        # reads globe, then Unified, then the mailbox. Centred on the same
+        # axis as the identity block beneath it.
+        self.globe = DottedGlobe()
+        globe_row = QHBoxLayout()
+        globe_row.setContentsMargins(0, 0, 0, 0)
+        globe_row.addStretch(1)
+        globe_row.addWidget(self.globe)
+        globe_row.addStretch(1)
+        root.addLayout(globe_row)
+        root.addSpacing(t.SPACE_XXL)
 
-        self._centre_on_screen()
+        mark = QVBoxLayout()
+        mark.setSpacing(0)
+        mark.setContentsMargins(0, 0, 0, 0)
 
-    def _centre_on_screen(self) -> None:
-        screen = QApplication.primaryScreen()
-        if screen is None:
+        # THE SAME SIZE THE SIDEBAR SETS IT IN, deliberately. The wordmark
+        # here is app_title, which is exactly what the sidebar masthead
+        # uses, so the mark the user is looking at during startup is the
+        # same weight as the one still sitting in the shell after the
+        # reveal. Enlarging it for the splash would make the opening an
+        # advertisement for a product whose own header is smaller.
+        title = QLabel(APP_NAME)
+        title.setFont(t.make_font("app_title"))
+        t.role(title, "primary")
+        mark.addWidget(title, 0, Qt.AlignmentFlag.AlignLeft)
+        mark.addSpacing(t.SPACE_SM)
+
+        width = _mark_width()
+        self.bar = OpeningBar(width)
+        mark.addWidget(self.bar, 0, Qt.AlignmentFlag.AlignLeft)
+        mark.addSpacing(t.SPACE_MD)
+
+        # The product's one standing claim, stated exactly as the sidebar
+        # states it - the lock belongs to the sentence.
+        secure = QHBoxLayout()
+        secure.setContentsMargins(0, 0, 0, 0)
+        secure.setSpacing(t.SPACE_XS + 2)
+        self._lock = QLabel()
+        self._lock.setPixmap(
+            simple_icon("lock", _LOCK_SIZE, t.SECURE).pixmap(_LOCK_SIZE, _LOCK_SIZE)
+        )
+        secure.addWidget(self._lock, 0, Qt.AlignmentFlag.AlignVCenter)
+        caption = QLabel(_CAPTION)
+        caption.setFont(t.make_font("caption"))
+        t.role(caption, "tertiary")
+        secure.addWidget(caption, 0, Qt.AlignmentFlag.AlignVCenter)
+        secure.addStretch(1)
+        mark.addLayout(secure)
+        mark.addSpacing(t.SPACE_XL)
+
+        # What is actually running. Fixed height, so naming a longer step
+        # cannot nudge the mark above it: the identity must not move while
+        # the text under it changes.
+        self._stage_label = QLabel("Starting")
+        self._stage_label.setFont(t.make_font("caption"))
+        t.role(self._stage_label, "tertiary")
+        self._stage_label.setFixedHeight(
+            QFontMetrics(t.make_font("caption")).height()
+        )
+        mark.addWidget(self._stage_label, 0, Qt.AlignmentFlag.AlignLeft)
+
+        # The block is left-aligned within itself and centred as a unit. A
+        # centred wordmark over a centred bar over centred prose is three
+        # centre lines and no edge, which is what a splash screen looks
+        # like; one shared left edge is what a page looks like.
+        holder = QWidget()
+        holder.setLayout(mark)
+        holder.setFixedWidth(width)
+        centred = QHBoxLayout()
+        centred.setContentsMargins(0, 0, 0, 0)
+        centred.addStretch(1)
+        centred.addWidget(holder)
+        centred.addStretch(1)
+        root.addLayout(centred)
+        root.addStretch(6)
+
+        self._identity = holder
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        """The restore size, for the brief moment this window has one.
+
+        Matches MainWindow's, so that if a window manager declines to
+        maximize, what appears is still a sensibly proportioned window
+        rather than whatever Qt would otherwise have guessed.
+        """
+        return QSize(1280, 800)
+
+    def open_maximized(self) -> None:
+        """Show filling the work area, then bring the identity up.
+
+        showMaximized(), never a computed geometry: it is the only call
+        that respects the taskbar, per-monitor DPI and whichever screen
+        the window was placed on, and it leaves normal minimise / maximise
+        / close behaviour intact. Nothing here hard-codes a resolution.
+        """
+        self.showMaximized()
+        # Only the content rises. Fading the whole window in would flash
+        # the desktop through it, and the surface is already the right
+        # colour from the first frame. The globe first, the name a beat
+        # later; under reduced motion both are simply there.
+        motion.fade_in(self.globe, duration=t.DURATION_SLOW)
+        if motion.motion_enabled():
+            motion.set_opacity(self._identity, 0.0)
+            self._identity_timer = motion.after(
+                IDENTITY_DELAY_MS,
+                lambda: motion.fade_in(self._identity, duration=t.DURATION_SLOW),
+                self,
+            )
+        else:
+            motion.fade_in(self._identity)
+
+    # ------------------------------------------------------------- stages
+
+    def bring_to_front(self) -> None:
+        """Put the opening layer back above the shell, if it is still here.
+
+        showMaximized() on the main window puts it in front on Windows, so
+        the layer that is supposed to be covering it has to be raised
+        again. Guarded because the user may have closed it in between, and
+        raise_() on a destroyed widget is a hard crash.
+        """
+        if self._closed:
             return
-        available = screen.availableGeometry()
-        self.move(available.center() - self.rect().center())
+        self.raise_()
 
-    # ----------------------------------------------------------------- api
+    def was_cancelled(self) -> bool:
+        """True when the user closed this window before startup finished.
 
-    def set_stage(self, index: int, text: str = "") -> None:
-        """Report a completed step. `index` is 1-based; the fraction and
-        the label move together."""
-        label = text or (STAGES[index - 1] if 0 < index <= len(STAGES) else "")
-        if label and label != self._label:
-            self._previous_label = self._label
-            self._label = label
-            self._swap.set_now(1.0)
-            self._swap.to(0.0)
-        self._stage = max(self._stage, index)
-        self._progress.to(min(1.0, self._stage / len(STAGES)))
+        The caller has to ask, because "the opening surface is gone" and
+        "the app should open anyway" are different situations and only
+        main() can decide between them.
+        """
+        return self._closed and not self._handing_over
 
-    def apply_theme(self) -> None:
-        self.update()
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._closed = True
+        self.globe.stop()
+        super().closeEvent(event)
 
-    # --------------------------------------------------------------- paint
+    def set_stage(self, text: str) -> None:
+        """Name the step that is starting, and advance the bar to what the
+        steps before it have earned."""
+        if self._closed:
+            return  # the window is gone; the worker does not know yet
+        self._stage_label.setText(text.rstrip(".").rstrip("…"))
+        target = self.STAGE_PROGRESS.get(text)
+        if target is not None:
+            self.bar.advance_to(target)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    def finish(self, on_done) -> None:
+        """Complete the bar, fade this layer away, and hand over.
 
-        palette = t.theme_manager.palette
-        entrance = self._entrance.value
-        painter.setOpacity(1.0 - entrance)
-
-        card = QRectF(_SHADOW, _SHADOW, _CARD_WIDTH, _CARD_HEIGHT)
-        radius = t.RADIUS_XL
-        path = QPainterPath()
-        path.addRoundedRect(card, radius, radius)
-
-        # A soft, tinted shadow painted as concentric strokes: this window
-        # is translucent, so a QGraphicsDropShadowEffect has nothing opaque
-        # to cast from.
-        shadow = QColor(palette.shadow)
-        for step in range(10, 0, -1):
-            ring = QColor(shadow)
-            ring.setAlpha(max(2, int(shadow.alpha() / (step * 3.2))))
-            painter.setPen(QPen(ring, step * 2))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(
-                card.adjusted(-step, -step + 2, step, step + 2),
-                radius + step, radius + step,
+        `on_done` runs once the window is gone, on every path - reduced
+        motion and a startup too fast for the animation to have played
+        included. A handover callback that can be skipped is an app that
+        never finishes opening.
+        """
+        def fade_away() -> None:
+            if not motion.motion_enabled():
+                self.close()
+                on_done()
+                return
+            # THE WHOLE WINDOW DISSOLVES, NOT ITS CONTENTS. Fading the
+            # identity alone leaves the opening surface fully opaque over
+            # the shell for the entire outro, so close() then snaps the
+            # shell into existence - a cut dressed up as a fade, and the
+            # exact transition this rewrite exists to remove. Window
+            # opacity is composited by DWM, so the two maximized windows
+            # cross-dissolve into each other for free.
+            motion.animate_property(
+                self, "windowOpacity", 0.0, duration=t.DURATION_BASE,
+                on_done=lambda: (self.close(), on_done()),
             )
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(palette.surface))
-        painter.drawPath(path)
+        self._handing_over = True
+        if self._closed:
+            # Already dismissed by the user. The handover still has to run
+            # or nothing would ever show the shell - it just has no window
+            # left to animate out.
+            on_done()
+            return
+        self.bar.finish(fade_away)
 
-        painter.setPen(QPen(QColor(palette.border), 1))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(card.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+    def fail(self) -> None:
+        """Startup broke: stop the bar and get out of the way.
 
-        # The lit top edge every raised surface in the app carries.
-        painter.save()
-        painter.setClipPath(path)
-        painter.setPen(QPen(QColor(palette.highlight), 1))
-        painter.drawLine(
-            card.left() + radius, card.top() + 0.75,
-            card.right() - radius, card.top() + 0.75,
+        A bar still advancing behind a dialog that says startup failed is
+        the interface contradicting itself, and a splash left on screen
+        with nothing behind it is an app that looks hung.
+        """
+        self._handing_over = True
+        if self._closed:
+            return
+        self.bar.stop()
+        self.close()
+
+    def retheme(self) -> None:
+        if self._closed:
+            return
+        self.setStyleSheet(f"background: {t.BG_APP};")
+        self._lock.setPixmap(
+            simple_icon("lock", _LOCK_SIZE, t.SECURE).pixmap(_LOCK_SIZE, _LOCK_SIZE)
         )
-        painter.restore()
-
-        self._paint_content(painter, card, palette)
-        painter.end()
-
-    def _paint_content(self, painter: QPainter, card: QRectF, palette) -> None:
-        centre_x = card.center().x()
-        y = card.top() + 40
-
-        painter.drawPixmap(
-            int(centre_x - _MARK / 2), int(y), make_mark(_MARK, palette.accent)
-        )
-        y += _MARK + t.SPACE_XL
-
-        title_font = t.make_font("title")
-        painter.setFont(title_font)
-        painter.setPen(QColor(palette.text_primary))
-        title_height = QFontMetrics(title_font).height()
-        painter.drawText(
-            QRectF(card.left(), y, card.width(), title_height),
-            Qt.AlignmentFlag.AlignHCenter, APP_NAME,
-        )
-        y += title_height + t.SPACE_2XS
-
-        caption_font = t.make_font("caption")
-        painter.setFont(caption_font)
-        painter.setPen(QColor(palette.text_tertiary))
-        caption_height = QFontMetrics(caption_font).height()
-        painter.drawText(
-            QRectF(card.left(), y, card.width(), caption_height),
-            Qt.AlignmentFlag.AlignHCenter, "Your accounts, one mailbox",
-        )
-
-        # -- progress track, sitting above the stage line
-        track_y = card.bottom() - 64
-        track = QRectF(centre_x - _TRACK_WIDTH / 2, track_y,
-                       _TRACK_WIDTH, _TRACK_HEIGHT)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(palette.surface_active))
-        painter.drawRoundedRect(track, _TRACK_HEIGHT / 2, _TRACK_HEIGHT / 2)
-
-        filled = max(_TRACK_HEIGHT, track.width() * self._progress.value)
-        painter.setBrush(QColor(palette.accent))
-        painter.drawRoundedRect(
-            QRectF(track.left(), track.top(), filled, track.height()),
-            _TRACK_HEIGHT / 2, _TRACK_HEIGHT / 2,
-        )
-
-        # -- the stage line, swapping in place
-        stage_font = t.make_font("body_sm")
-        painter.setFont(stage_font)
-        stage_height = QFontMetrics(stage_font).height()
-        stage_rect = QRectF(card.left(), track.bottom() + t.SPACE_XL,
-                            card.width(), stage_height)
-        swap = self._swap.value
-        base = QColor(palette.text_secondary)
-
-        if swap > 0.02 and self._previous_label:
-            leaving = QColor(base)
-            leaving.setAlphaF(max(0.0, 1.0 - swap * 1.8))
-            painter.setPen(leaving)
-            painter.drawText(
-                stage_rect.translated(0, -motion.DISTANCE_MICRO * swap),
-                Qt.AlignmentFlag.AlignHCenter, self._previous_label,
-            )
-
-        arriving = QColor(base)
-        arriving.setAlphaF(max(0.0, 1.0 - swap))
-        painter.setPen(arriving)
-        painter.drawText(
-            stage_rect.translated(0, motion.DISTANCE_MICRO * swap),
-            Qt.AlignmentFlag.AlignHCenter, self._label,
-        )
-
-        # -- version, quiet, bottom right
-        version_font = t.make_font("caption")
-        painter.setFont(version_font)
-        painter.setPen(blend(palette.text_tertiary, palette.surface, 0.35))
-        painter.drawText(
-            QRectF(card.left(), card.bottom() - 26, card.width() - t.SPACE_XL,
-                   QFontMetrics(version_font).height()),
-            Qt.AlignmentFlag.AlignRight, f"v{__version__}",
-        )
+        self.bar.retheme()

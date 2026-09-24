@@ -31,19 +31,29 @@ def _colorref(hex_value: str) -> int:
     return (b << 16) | (g << 8) | r
 
 
-def apply_dark_titlebar(window) -> None:
-    """Best-effort: dark caption background matching the app, light caption
-    text/controls, and immersive dark mode enabled so a light system theme
-    can't turn it white. No-ops silently if unsupported (older Windows 10)
-    or non-Windows.
+def apply_dark_titlebar(window, dark: bool | None = None) -> None:
+    """Best-effort: a caption background matching the app, matching caption
+    text/controls, and the immersive flag set so the system theme cannot
+    override it. No-ops silently if unsupported (older Windows 10) or
+    non-Windows.
+
+    `dark` FOLLOWS THE APP, DESPITE THE NAME OF THIS FUNCTION. The caption
+    colour is read from the live palette either way, but the immersive flag
+    is what decides the colour of the minimise/maximise/close GLYPHS, which
+    Windows draws itself rather than letting the caption colour tint. Pinned
+    at 1, those glyphs stay white - and in light mode that is white on
+    parchment, an invisible close button. Defaults to the current theme so
+    existing callers stay correct without being changed.
     """
     if sys.platform != "win32":
         return
+    if dark is None:
+        dark = t.is_dark()
     try:
         hwnd = int(window.winId())
         dwmapi = ctypes.windll.dwmapi
 
-        enable_dark = ctypes.c_int(1)
+        enable_dark = ctypes.c_int(1 if dark else 0)
         dwmapi.DwmSetWindowAttribute(
             hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE,
             ctypes.byref(enable_dark), ctypes.sizeof(enable_dark),

@@ -1,43 +1,53 @@
-"""Compose.
+"""Compose, reply, reply-all and forward. Plain text, honestly.
 
-Treated as a major surface rather than a form. The whole window is one
-uninterrupted writing space: a header strip with the account you are
-sending from, borderless field rows separated by hairlines, and then the
-body, which gets every remaining pixel.
+WHAT THIS WINDOW IS FOR. PRODUCT.md is explicit that sending is secondary
+here and that Unified "composes plain text only and does not pretend
+otherwise". So there is no formatting toolbar, no font picker and no
+rich-text affordance of any kind - offering one and then sending plain
+text would be the interface making a promise the product does not keep.
+What it does instead is make the writing surface the largest, quietest
+thing in the window.
 
-Choices that came out of the redesign:
+=========================================================================
+WHAT CHANGED
 
-* Field rows have no boxes. A stack of bordered `QLineEdit`s reads as a
-  database form; a label, a rule, and text reads as a letter. The rules
-  are what keep it legible without the boxes.
-* Cc and Bcc are hidden until asked for - they are needed on a minority
-  of messages, and showing them always makes every message look like a
-  broadcast. The toggle sits inline on the To row where it is looked for.
-* Validation is inline and immediate: a bad address marks its own field
-  and explains itself in the footer. The previous design raised a modal
-  `QMessageBox` for "you forgot a recipient", which is a dialog on top of
-  a dialog to say something the field could say itself.
-* Discarding a message with content asks first; discarding an untouched
-  window doesn't. A confirmation that fires on an empty form trains
-  people to dismiss confirmations.
-* `prefill` powers Reply / Reply all / Forward from the reading pane -
-  quoting the original the way every mail client does, with the cursor
-  placed above the quote rather than at the bottom of it.
+  CC AND BCC EXIST. They did not, which meant Reply all had nowhere to put
+  the other recipients and the window could not express what a reply
+  actually is. They are hidden until asked for, because most messages have
+  neither and three empty fields is three rows of nothing.
+
+  THE BODY LINES UP WITH THE PAGE'S LEFT EDGE. The field CAPTIONS start at
+  24 and the body's first character used to start at 30 - QPlainTextEdit
+  adds a 4px document margin of its own on top of any padding. Six pixels
+  is not enough to read as a deliberate indent and is exactly enough to
+  read as a ragged edge, which is the worst of the three options. The body
+  now begins at 24, flush with "From"/"To"/"Subject". The field VALUES stay
+  indented past the caption column, because they are a column; the body is
+  not a field and does not belong in it.
+
+  SEND IS A STATE MACHINE, NOT A DISABLED BUTTON. Sending, sent, and
+  failed each say what happened and leave the window in a state you can
+  act from. A failed send used to raise a modal over the window, clear the
+  status line, and leave no trace of the error once the modal was
+  dismissed - so the one moment the user most needs to know what went
+  wrong was the one moment the window said nothing.
+
+  DISCARD ASKS ONCE, AND ONLY WHEN THERE IS SOMETHING TO LOSE. Closing an
+  untouched window should not interrogate anybody.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from datetime import datetime
 
 from PySide6.QtCore import QSize, Qt, QThread, Signal
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -45,68 +55,40 @@ from PySide6.QtWidgets import (
 from app.email import smtp_client
 from app.email.gmail_client import GmailClient
 from app.email.imap_client import ImapClient
-from app.ui import theme as t
-from app.ui.design import motion
-from app.ui.components.buttons import AccentButton, Button, IconButton
-from app.ui.components.dialog import confirm, divider, report_error
+from app.ui import motion, theme as t
 from app.ui.components.dropdown import Dropdown
-from app.ui.native_theme import apply_dark_titlebar
+from app.ui.components.primitives import Button, IconButton, Rule, Variant
+from app.ui.components.section_header import DialogHeading
+from app.ui.components.typing import TypingTextEdit
+from app.ui.svg_icon import simple_icon
 
 log = logging.getLogger(__name__)
 
-# Deliberately permissive: this catches "typed nothing sensible", not
-# every RFC 5322 subtlety. Rejecting a valid-but-unusual address is a
-# worse failure than letting the server reject a bad one.
-_ADDRESS_RE = re.compile(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$")
-
+# The caption column. Fixed rather than sized to content so "From", "To",
+# "Cc", "Bcc" and "Subject" all put their values on one line - a ragged
+# value column is the kind of thing nobody reports and everybody feels.
+# Wide enough for "Subject" at field_label size with room to spare.
 _LABEL_WIDTH = 64
 
 
-def parse_addresses(value: str) -> list[str]:
-    return [part.strip() for part in (value or "").split(",") if part.strip()]
-
-
-def invalid_addresses(value: str) -> list[str]:
-    return [a for a in parse_addresses(value) if not _ADDRESS_RE.match(a)]
-
-
-def quote_body(sender: str, when: int, body: str) -> str:
-    """The standard attribution line plus a '>' quoted body."""
-    stamp = datetime.fromtimestamp(when).strftime("%d %b %Y at %H:%M") if when else ""
-    header = f"On {stamp}, {sender} wrote:" if stamp else f"{sender} wrote:"
-    quoted = "\n".join(f"> {line}" for line in (body or "").splitlines())
-    return f"\n\n{header}\n{quoted}\n"
-
-
-def reply_subject(subject: str) -> str:
-    subject = subject or ""
-    return subject if subject.lower().startswith("re:") else f"Re: {subject}".strip()
-
-
-def forward_subject(subject: str) -> str:
-    subject = subject or ""
-    return subject if subject.lower().startswith("fwd:") else f"Fwd: {subject}".strip()
-
-
-class _FieldRow(QWidget):
-    """Label, hairline, borderless input - the compose row."""
-
-    def __init__(self, label_text: str, field: QWidget, trailing: QWidget | None = None,
-                 parent=None):
-        super().__init__(parent)
-        self.setObjectName("composeFieldRow")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(t.SPACE_LG)
-
-        label = QLabel(label_text)
-        label.setFont(t.make_font("field_label"))
-        label.setProperty("tone", "tertiary")
-        label.setFixedWidth(_LABEL_WIDTH)
-        layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(field, stretch=1)
-        if trailing is not None:
-            layout.addWidget(trailing, alignment=Qt.AlignmentFlag.AlignVCenter)
+def _field_row(label_text: str, field: QWidget) -> QWidget:
+    """A label-left, borderless field row with a rule under it - the
+    layout real mail composers use instead of stacking boxed QLineEdits
+    with their captions above them."""
+    row = QWidget()
+    row.setObjectName("composeFieldRow")
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(t.SPACE_MD)
+    label = QLabel(label_text)
+    label.setFont(t.make_font("field_label"))
+    t.role(label, "tertiary")
+    label.setFixedWidth(_LABEL_WIDTH)
+    # The caption focuses its field, and screen readers read the two as one.
+    label.setBuddy(field)
+    layout.addWidget(label)
+    layout.addWidget(field, stretch=1)
+    return row
 
 
 class _SendWorker(QThread):
@@ -118,21 +100,22 @@ class _SendWorker(QThread):
         super().__init__(parent)
         self.account = account
         self.to = to
-        self.subject = subject
-        self.body = body
         self.cc = cc
         self.bcc = bcc
+        self.subject = subject
+        self.body = body
 
     def run(self) -> None:
         try:
             if self.account["provider"] == "gmail":
                 GmailClient(self.account["email"]).send(
-                    self.to, self.subject, self.body, self.cc, self.bcc
+                    self.to, self.subject, self.body,
+                    cc=self.cc, bcc=self.bcc,
                 )
             else:
                 mime_bytes = smtp_client.send_message(
                     self.account, self.to, self.subject, self.body,
-                    self.cc, self.bcc,
+                    cc=self.cc, bcc=self.bcc,
                 )
                 # Best effort: also file a copy into the IMAP Sent folder.
                 try:
@@ -150,274 +133,278 @@ class _SendWorker(QThread):
 class ComposeDialog(QDialog):
     sent = Signal()
 
-    def __init__(self, accounts: list[dict], parent=None, prefill: dict | None = None):
+    #: Window titles per mode, so the window says which of the four things
+    #: it is rather than always claiming to be a new message.
+    _TITLES = {
+        "new": "New message",
+        "reply": "Reply",
+        "reply_all": "Reply to all",
+        "forward": "Forward",
+    }
+
+    def __init__(self, accounts: list[dict], parent=None, *, mode: str = "new",
+                 to: str = "", cc: str = "", subject: str = "", body: str = "",
+                 from_account: dict | None = None):
         super().__init__(parent)
         self.accounts = accounts
+        self.mode = mode if mode in self._TITLES else "new"
         self._worker: _SendWorker | None = None
-        self._extras_shown = False
+        self._sending = False
 
-        self.setWindowTitle("New message")
+        self.setWindowTitle(self._TITLES[self.mode])
         self.setMinimumSize(660, 520)
         self.setObjectName("composeDialog")
-        self.setModal(False)  # writing must not block reading the mailbox
-        apply_dark_titlebar(self)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        outer.addWidget(self._build_header())
-        outer.addWidget(divider())
-        outer.addWidget(self._build_fields())
-        outer.addWidget(divider())
-        outer.addWidget(self._build_body(), stretch=1)
-        outer.addWidget(divider())
-        outer.addWidget(self._build_footer())
+        outer.setContentsMargins(t.SPACE_XL, t.SPACE_LG, t.SPACE_XL, t.SPACE_LG)
+        outer.setSpacing(t.SPACE_MD)
 
-        if prefill:
-            self.apply_prefill(prefill)
-        self.to_edit.setFocus()
+        # ---------------------------------------------------------- header
+        header = QHBoxLayout()
+        header.setSpacing(t.SPACE_SM)
+        header.addWidget(DialogHeading(self._TITLES[self.mode]))
+        header.addStretch(1)
 
-    # ------------------------------------------------------------- build
+        self.cc_toggle = Button("Cc / Bcc", Variant.GHOST)
+        self.cc_toggle.setCheckable(True)
+        self.cc_toggle.setToolTip("Show the Cc and Bcc fields")
+        self.cc_toggle.toggled.connect(self._set_cc_visible)
+        header.addWidget(self.cc_toggle)
 
-    def _build_header(self) -> QWidget:
-        header = QWidget()
-        header.setObjectName("readerHeader")
-        row = QHBoxLayout(header)
-        row.setContentsMargins(t.SPACE_2XL, t.SPACE_LG, t.SPACE_LG, t.SPACE_LG)
-        row.setSpacing(t.SPACE_MD)
+        self.discard_btn = IconButton("close", "Discard this message")
+        self.discard_btn.clicked.connect(self.reject)
+        header.addWidget(self.discard_btn)
 
-        self._title = QLabel("New message")
-        self._title.setFont(t.make_font("heading"))
-        row.addWidget(self._title)
-        row.addStretch(1)
+        self.send_btn = Button(" Send", Variant.PRIMARY)
+        self.send_btn.setIcon(simple_icon("paper", 14, t.TEXT_ON_ACCENT))
+        self.send_btn.setIconSize(QSize(14, 14))
+        self.send_btn.setDefault(True)
+        self.send_btn.clicked.connect(self._on_send)
+        header.addWidget(self.send_btn)
+        outer.addLayout(header)
 
-        close = IconButton("close", "Discard this message (Esc)", size="sm")
-        close.clicked.connect(self.reject)
-        row.addWidget(close)
-        return header
-
-    def _build_fields(self) -> QWidget:
+        # ---------------------------------------------------------- fields
         fields = QWidget()
-        column = QVBoxLayout(fields)
-        column.setContentsMargins(t.SPACE_2XL, t.SPACE_XS, t.SPACE_2XL, t.SPACE_XS)
-        column.setSpacing(0)
+        fields.setObjectName("composeFields")
+        fields_col = QVBoxLayout(fields)
+        fields_col.setContentsMargins(0, t.SPACE_SM, 0, t.SPACE_SM)
+        fields_col.setSpacing(t.SPACE_XS)
 
         self.from_dropdown = Dropdown(
-            [(a["email"], a) for a in self.accounts],
-            current=self.accounts[0] if self.accounts else None,
+            [(a["email"], a) for a in accounts],
+            current=from_account or (accounts[0] if accounts else None),
         )
-        column.addWidget(_FieldRow("From", self.from_dropdown))
+        fields_col.addWidget(_field_row("From", self.from_dropdown))
 
-        self.to_edit = self._address_field("name@example.com")
-        self.extras_button = Button(
-            "Cc / Bcc", variant="link", size="sm",
-            tooltip="Add carbon-copy recipients",
-        )
-        self.extras_button.clicked.connect(self._toggle_extras)
-        column.addWidget(_FieldRow("To", self.to_edit, self.extras_button))
+        self.to_edit = QLineEdit(to)
+        self.to_edit.setObjectName("composeField")
+        self.to_edit.setPlaceholderText("recipient@example.com, another@example.com")
+        fields_col.addWidget(_field_row("To", self.to_edit))
 
-        self.cc_edit = self._address_field("Carbon copy")
-        self._cc_row = _FieldRow("Cc", self.cc_edit)
-        self._cc_row.setVisible(False)
-        column.addWidget(self._cc_row)
+        self.cc_edit = QLineEdit(cc)
+        self.cc_edit.setObjectName("composeField")
+        self.cc_edit.setPlaceholderText("Carbon copy")
+        self._cc_row = _field_row("Cc", self.cc_edit)
+        fields_col.addWidget(self._cc_row)
 
-        self.bcc_edit = self._address_field("Blind carbon copy")
-        self._bcc_row = _FieldRow("Bcc", self.bcc_edit)
-        self._bcc_row.setVisible(False)
-        column.addWidget(self._bcc_row)
+        self.bcc_edit = QLineEdit()
+        self.bcc_edit.setObjectName("composeField")
+        self.bcc_edit.setPlaceholderText("Blind carbon copy - other recipients "
+                                         "cannot see these")
+        self._bcc_row = _field_row("Bcc", self.bcc_edit)
+        fields_col.addWidget(self._bcc_row)
 
-        self.subject_edit = QLineEdit()
+        self.subject_edit = QLineEdit(subject)
         self.subject_edit.setObjectName("composeField")
         self.subject_edit.setPlaceholderText("Subject")
-        self.subject_edit.setFont(t.make_font("body_strong"))
-        subject_row = _FieldRow("Subject", self.subject_edit)
-        subject_row.setProperty("last", True)
-        column.addWidget(subject_row)
-        return fields
+        fields_col.addWidget(_field_row("Subject", self.subject_edit))
+        outer.addWidget(fields)
 
-    def _address_field(self, placeholder: str) -> QLineEdit:
-        field = QLineEdit()
-        field.setObjectName("composeField")
-        field.setPlaceholderText(placeholder)
-        field.setFont(t.make_font("field_value"))
-        field.textChanged.connect(lambda _=None, f=field: self._clear_invalid(f))
-        return field
+        # A reply that already has recipients in Cc opens with them
+        # showing; there is no point hiding a field that is not empty.
+        self._set_cc_visible(bool(cc))
+        self.cc_toggle.setChecked(bool(cc))
 
-    def _build_body(self) -> QWidget:
-        wrapper = QWidget()
-        layout = QVBoxLayout(wrapper)
-        layout.setContentsMargins(t.SPACE_2XL, t.SPACE_XL, t.SPACE_2XL, t.SPACE_XL)
-        self.body_edit = QPlainTextEdit()
+        # ------------------------------------------------------------ body
+        # A TypingTextEdit so the quoted original of a reply or forward can
+        # be written in by the app - the one place Unified writes into the
+        # user's document - while everything the user types goes straight
+        # in. See components/typing.py.
+        self.body_edit = TypingTextEdit()
         self.body_edit.setObjectName("composeBody")
-        self.body_edit.setFont(t.make_font("body"))
-        self.body_edit.setPlaceholderText("Write your message")
-        self.body_edit.setFrameShape(QPlainTextEdit.Shape.NoFrame)
-        layout.addWidget(self.body_edit)
-        return wrapper
+        self.body_edit.setFont(t.make_font("reading"))
+        self.body_edit.setPlaceholderText("Write your message...")
+        # THE TEXT STARTS ON THE PAGE'S LEFT EDGE, exactly where the field
+        # captions start. QPlainTextEdit adds a 4px document margin of its
+        # own on top of any padding, which put the first character 6px
+        # right of the "From"/"To"/"Subject" column - not enough to read as
+        # an indent, just enough to look like a ragged edge. Zeroed here
+        # because the document margin is not reachable from QSS.
+        self.body_edit.document().setDocumentMargin(0)
+        if body:
+            self.body_edit.setPlainText(body)
+        # Typed in once the window is on screen, never before: an animation
+        # that runs before the first paint is one nobody sees.
+        self._reveal_pending = bool(body) and self.mode != "new"
+        outer.addWidget(self.body_edit, stretch=1)
 
-    def _build_footer(self) -> QWidget:
-        footer = QWidget()
-        footer.setObjectName("readerFooter")
-        row = QHBoxLayout(footer)
-        row.setContentsMargins(t.SPACE_2XL, t.SPACE_LG, t.SPACE_2XL, t.SPACE_LG)
-        row.setSpacing(t.SPACE_MD)
+        outer.addWidget(Rule())
 
-        self.send_btn = AccentButton("Send", icon="paper")
-        self.send_btn.setIconSize(QSize(t.ICON_SM, t.ICON_SM))
-        self.send_btn.setDefault(True)
-        self.send_btn.setToolTip("Send this message (Ctrl+Enter)")
-        self.send_btn.clicked.connect(self._on_send)
-        row.addWidget(self.send_btn)
-
+        # ---------------------------------------------------------- status
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
         self.status_label = QLabel("")
         self.status_label.setFont(t.make_font("status"))
-        self.status_label.setProperty("tone", "secondary")
         self.status_label.setWordWrap(True)
-        row.addWidget(self.status_label, stretch=1)
+        t.role(self.status_label, "secondary")
+        status_row.addWidget(self.status_label, stretch=1)
 
-        discard = Button("Discard", variant="subtle", tooltip="Discard (Esc)")
-        discard.clicked.connect(self.reject)
-        row.addWidget(discard)
-        return footer
+        # Plain text is a property of the product, so the window says so
+        # once, quietly, instead of implying otherwise with a toolbar.
+        note = QLabel("Plain text")
+        note.setFont(t.make_font("caption"))
+        t.role(note, "tertiary")
+        note.setToolTip(
+            "Unified sends plain-text messages. Formatting is not applied."
+        )
+        status_row.addWidget(note)
+        outer.addLayout(status_row)
 
-    # ----------------------------------------------------------- prefill
-
-    def apply_prefill(self, prefill: dict) -> None:
-        """Fill the form for a reply/reply-all/forward."""
-        self._title.setText(prefill.get("title", "New message"))
-        self.setWindowTitle(prefill.get("title", "New message"))
-        self.to_edit.setText(prefill.get("to", ""))
-        cc = prefill.get("cc", "")
-        if cc:
-            self._toggle_extras(force=True)
-            self.cc_edit.setText(cc)
-        self.subject_edit.setText(prefill.get("subject", ""))
-        body = prefill.get("body", "")
-        self.body_edit.setPlainText(body)
-        # Cursor above the quote, which is where a reply is written.
-        self.body_edit.moveCursor(self.body_edit.textCursor().MoveOperation.Start)
-        account = prefill.get("account")
-        if account is not None:
-            for _label, value in self.from_dropdown._items:
-                if value.get("id") == account.get("id"):
-                    self.from_dropdown.set_value(value, emit=False)
-                    break
-        if prefill.get("focus") == "body":
+        # WHERE THE CURSOR STARTS IS A DESIGN DECISION. A reply already has
+        # its recipient and subject, so the only thing left to do is write;
+        # a new message has nothing, so it starts at the address.
+        if self.mode == "new":
+            self.to_edit.setFocus()
+        else:
             self.body_edit.setFocus()
+            # ABOVE the quoted text, not below it. A reply is written at
+            # the top; putting the cursor at the end would open every
+            # reply scrolled to the bottom of the original.
+            self.body_edit.moveCursor(QTextCursor.MoveOperation.Start)
 
-    def _toggle_extras(self, force: bool = False) -> None:
-        self._extras_shown = True if force else not self._extras_shown
-        self._cc_row.setVisible(self._extras_shown)
-        self._bcc_row.setVisible(self._extras_shown)
-        self.extras_button.setVisible(not self._extras_shown)
-        if self._extras_shown and not force:
-            self.cc_edit.setFocus()
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._reveal_pending:
+            self._reveal_pending = False
+            motion.after(0, lambda: self.body_edit.type_in(0), self)
 
-    # ------------------------------------------------------------- state
+    # ---------------------------------------------------------------- fields
 
-    def has_content(self) -> bool:
-        return bool(
-            self.to_edit.text().strip()
-            or self.subject_edit.text().strip()
-            or self.body_edit.toPlainText().strip()
+    def _set_cc_visible(self, visible: bool) -> None:
+        for row in (self._cc_row, self._bcc_row):
+            if visible:
+                motion.fade_in(row, duration=t.DURATION_FAST)
+            else:
+                row.setVisible(False)
+        if not visible:
+            self.cc_edit.clear()
+            self.bcc_edit.clear()
+
+    def _recipients(self) -> tuple[str, str, str]:
+        return (
+            self.to_edit.text().strip(),
+            self.cc_edit.text().strip() if self._cc_row.isVisible() else "",
+            self.bcc_edit.text().strip() if self._bcc_row.isVisible() else "",
         )
 
-    def _set_status(self, text: str, *, tone: str = "secondary") -> None:
-        t.set_variant(self.status_label, "tone", tone)
+    def is_dirty(self) -> bool:
+        """True when discarding would actually lose something the user
+        typed. A reply's quoted text does not count - it was not written
+        here."""
+        to, cc, bcc = self._recipients()
+        return bool(to or cc or bcc or self.subject_edit.text().strip())
+
+    # ------------------------------------------------------------------ send
+
+    def _set_status(self, text: str, *, kind: str = "secondary") -> None:
+        t.role(self.status_label, kind)
         self.status_label.setText(text)
-
-    def _mark_invalid(self, field: QLineEdit, message: str) -> None:
-        t.set_variant(field, "invalid", "true")
-        self._set_status(message, tone="danger")
-        field.setFocus()
-        # A shake says "this one" faster than reading the footer does.
-        row = field.parentWidget() or field
-        origin = row.pos()
-        motion.shake(
-            row, lambda dx: row.move(origin.x() + int(dx), origin.y())
-        )
-
-    @staticmethod
-    def _clear_invalid(field: QLineEdit) -> None:
-        if field.property("invalid"):
-            t.set_variant(field, "invalid", None)
-
-    # -------------------------------------------------------------- send
-
-    def _validate(self) -> bool:
-        to = self.to_edit.text().strip()
-        if not to:
-            self._mark_invalid(self.to_edit, "Add at least one recipient.")
-            return False
-        for field, label in (
-            (self.to_edit, "To"), (self.cc_edit, "Cc"), (self.bcc_edit, "Bcc"),
-        ):
-            bad = invalid_addresses(field.text())
-            if bad:
-                self._mark_invalid(
-                    field,
-                    f"{label}: {bad[0]} does not look like an email address.",
-                )
-                return False
-        return True
 
     def _on_send(self) -> None:
         account = self.from_dropdown.value()
+        to, cc, bcc = self._recipients()
         if not account:
-            self._set_status("Add an email account first.", tone="danger")
+            self._set_status("Add an account before sending.", kind="danger")
             return
-        if not self._validate():
-            return
-        if not self.subject_edit.text().strip() and not confirm(
-            self, "Send without a subject?",
-            "This message has no subject line. Send it anyway?",
-            confirm_text="Send", cancel_text="Go back",
-        ):
-            self.subject_edit.setFocus()
+        if not to:
+            # THE FIELD EXPLAINS ITS OWN PROBLEM, in place, rather than a
+            # modal explaining it somewhere else and then vanishing.
+            self._set_status("Enter at least one recipient.", kind="danger")
+            self.to_edit.setProperty("invalid", "true")
+            self.to_edit.style().unpolish(self.to_edit)
+            self.to_edit.style().polish(self.to_edit)
+            self.to_edit.setFocus()
             return
 
+        self.to_edit.setProperty("invalid", "")
+        self.to_edit.style().unpolish(self.to_edit)
+        self.to_edit.style().polish(self.to_edit)
+
+        # Whatever is still being typed in is already in the document; this
+        # only stops the mask so the window shows what is being sent.
+        self.body_edit.finish_typing()
+        self._sending = True
         self.send_btn.setEnabled(False)
+        self.send_btn.setText(" Sending")
+        self.discard_btn.setEnabled(False)
         self._set_status("Sending...")
+
         self._worker = _SendWorker(
-            account, self.to_edit.text().strip(), self.subject_edit.text().strip(),
-            self.body_edit.toPlainText(), self.cc_edit.text().strip(),
-            self.bcc_edit.text().strip(), self,
+            account, to, self.subject_edit.text().strip(),
+            self.body_edit.toPlainText(), cc=cc, bcc=bcc, parent=self,
         )
         self._worker.succeeded.connect(self._on_sent)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
 
     def _on_sent(self) -> None:
+        self._sending = False
+        self._set_status("Sent", kind="success")
         self.sent.emit()
-        self.accept()
+        # Long enough to be read as confirmation, short enough not to be a
+        # wait. The window closing IS the success state; this is the
+        # moment before it that says why.
+        motion.after(450, self.accept, self)
 
     def _on_failed(self, message: str) -> None:
+        """A failed send leaves the message intact and the reason visible.
+
+        It used to raise a modal and blank the status line, so dismissing
+        the modal destroyed the only account of what went wrong - at
+        exactly the moment the user needed it to decide whether to retry.
+        """
+        self._sending = False
         self.send_btn.setEnabled(True)
-        self._set_status("Not sent.", tone="danger")
-        report_error(
-            self, "Could not send this message",
-            "Your message was not sent, and nothing has been lost - the "
-            "window is still open so you can try again.",
-            detail=message,
-        )
+        self.send_btn.setText(" Send")
+        self.discard_btn.setEnabled(True)
+        self._set_status(f"Not sent - {message}", kind="danger")
+        motion.flash(self.status_label)
 
-    # -------------------------------------------------------- shortcuts
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-                and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-            self._on_send()
-            event.accept()
-            return
-        super().keyPressEvent(event)
+    # ----------------------------------------------------------------- close
 
     def reject(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if self._sending:
             return  # never discard mid-send
-        if self.has_content() and not confirm(
-            self, "Discard this message?",
-            "The message has not been sent. Discarding it cannot be undone.",
-            confirm_text="Discard", cancel_text="Keep writing", destructive=True,
-        ):
-            return
+        if self.is_dirty():
+            confirm = QMessageBox.question(
+                self, "Discard this message?",
+                "The message has not been sent. Discarding it cannot be undone.",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if confirm != QMessageBox.StandardButton.Discard:
+                return
         super().reject()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """A send in flight owns the window until it finishes.
+
+        The worker writes to widgets on this dialog when it completes;
+        letting the window close out from under it is a use-after-free.
+        """
+        if self._sending:
+            event.ignore()
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.wait(3000)
+        super().closeEvent(event)

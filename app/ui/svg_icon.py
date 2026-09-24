@@ -5,49 +5,25 @@ Unicode symbol or emoji standing in for a control. Source SVGs are drawn
 in black (fill or stroke, whichever suits the shape); at load time each is
 rasterized once per (name, size, color) and recolored via QPainter's
 SourceIn composition mode, so the same file serves every theme color the
-app needs without maintaining separate colored copies on disk.
+app needs (secondary/primary/accent/disabled) without maintaining
+separate colored copies on disk.
 
-Three layers, in the order a caller should reach for them:
-
-* `themed(name, size, role)` - the normal case. Colors come from the
-  active palette by *role*, and the QIcon carries per-state pixmaps, so
-  hover/checked/disabled are handled by Qt's own icon-mode machinery
-  rather than by hand at each call site.
-* `icon_set` / `simple_icon` - explicit colors, for the few places that
-  legitimately need one (a status dot that is always the danger color).
-* `theme_asset_url` - a real PNG on disk, for the two QSS subcontrols
-  (combo chevron, checkbox tick) that can only take an `image: url(...)`.
-
-The pixmap cache is keyed by color, so a theme switch simply produces new
-entries rather than needing invalidation; icons rebuilt after a switch
-pick up the new palette on their next `themed()` call.
+icon_set() builds a QIcon with distinct pixmaps for Qt's own Normal/
+Active/Disabled/Selected icon modes, so hover, pressed/checked, and
+disabled states are handled by Qt's normal icon-mode machinery rather
+than by hand in each widget.
 """
 
 from __future__ import annotations
 
-import tempfile
 from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 _ICONS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "icons"
-
-# Role -> the palette attribute an icon in that role is tinted with.
-# "quiet" is the default for anything that is not the focus of attention.
-_ICON_ROLE_COLORS = {
-    "quiet": ("text_tertiary", "text_primary", "accent", "text_disabled"),
-    "default": ("text_secondary", "text_primary", "accent", "text_disabled"),
-    "strong": ("text_primary", "text_primary", "accent", "text_disabled"),
-    "accent": ("accent", "accent_hover", "accent", "text_disabled"),
-    "on_accent": ("text_on_accent", "text_on_accent", "text_on_accent", "text_disabled"),
-    "danger": ("danger_fg", "danger_fg", "danger_fg", "text_disabled"),
-    "warning": ("warning_fg", "warning_fg", "warning_fg", "text_disabled"),
-    "success": ("success_fg", "success_fg", "success_fg", "text_disabled"),
-    "star": ("star", "star", "star", "text_disabled"),
-}
 
 
 @lru_cache(maxsize=None)
@@ -56,10 +32,6 @@ def _renderer(name: str) -> QSvgRenderer:
     if not path.exists():
         raise FileNotFoundError(f"Missing icon asset: {path}")
     return QSvgRenderer(str(path))
-
-
-def available_icons() -> list[str]:
-    return sorted(p.stem for p in _ICONS_DIR.glob("*.svg"))
 
 
 @lru_cache(maxsize=None)
@@ -77,19 +49,39 @@ def tinted_pixmap(name: str, size: int, color: str) -> QPixmap:
     return pixmap
 
 
-@lru_cache(maxsize=None)
-def blurred_pixmap(name: str, size: int, color: str, radius: int) -> QPixmap:
-    """A tinted icon, blurred by `radius`.
+# Extra rasterizations every QIcon carries beside its 1x pixmap.
+#
+# WHY. tinted_pixmap renders at the LOGICAL size, and a QIcon holding only
+# that pixmap is upscaled on a 125%, 150% or 200% display - which is what
+# most Windows laptops run at - so every glyph in the app was being drawn
+# soft. QIcon picks the closest pixmap for size x devicePixelRatio and
+# scales DOWN from a larger one cleanly, so one 2x variant covers every
+# common scale factor for the cost of a few kilobytes per icon.
+_DENSITIES = (1, 2)
 
-    Used by the icon-swap transition, where the outgoing glyph blurs out
-    as the incoming one resolves. Cached on the same key as the sharp
-    version, so a swap costs two cached lookups per frame rather than a
-    Gaussian.
+
+def _add(icon: QIcon, name: str, size: int, color: str,
+         mode: QIcon.Mode = QIcon.Mode.Normal,
+         state: QIcon.State = QIcon.State.Off) -> None:
+    for density in _DENSITIES:
+        icon.addPixmap(tinted_pixmap(name, size * density, color), mode, state)
+
+
+def paint_icon(painter: QPainter, name: str, rect: QRectF, color: str) -> None:
+    """Draw an icon straight into `rect`, sharp at any size and any scale.
+
+    For glyphs whose size is not fixed - the dock's magnified icons grow
+    continuously - a pixmap made at one size would be resampled on every
+    frame. This rasterizes at the PHYSICAL size the rect will occupy on
+    this painter's device, so a glyph is crisp at 100% and at 200% and at
+    every fractional size in between, and the cache keeps a moving glyph
+    from re-rendering the SVG on every frame.
     """
-    from app.ui.design.motion import blur_pixmap
-
-    pixmap = tinted_pixmap(name, size, color)
-    return blur_pixmap(pixmap, radius) if radius > 0 else pixmap
+    device = painter.device()
+    dpr = device.devicePixelRatioF() if device is not None else 1.0
+    physical = max(1, round(rect.width() * dpr))
+    pixmap = tinted_pixmap(name, physical, color)
+    painter.drawPixmap(rect, pixmap, QRectF(pixmap.rect()))
 
 
 def icon_set(
@@ -101,81 +93,27 @@ def icon_set(
     selected: str | None = None,
     disabled: str | None = None,
 ) -> QIcon:
-    """A QIcon whose color follows Qt's own icon Mode - hover uses Active,
-    checked/pressed uses Selected, disabled uses Disabled - so widgets get
-    correct state colors from the style engine instead of from bespoke
-    per-widget code."""
+    """Build a QIcon whose color changes with Qt's own icon Mode - hover
+    uses Active, checked/pressed uses Selected, disabled uses Disabled -
+    so widgets get correct state colors for free from Qt's style engine.
+    """
     icon = QIcon()
-    icon.addPixmap(tinted_pixmap(name, size, normal), QIcon.Mode.Normal)
+    _add(icon, name, size, normal, QIcon.Mode.Normal)
     if active:
-        icon.addPixmap(tinted_pixmap(name, size, active), QIcon.Mode.Active)
+        _add(icon, name, size, active, QIcon.Mode.Active)
     if selected:
-        icon.addPixmap(tinted_pixmap(name, size, selected), QIcon.Mode.Selected)
-        # Some style engines key checkable "checked" off State rather than
-        # Mode; register both so a checked toolbar button is never left
-        # with its resting color.
-        icon.addPixmap(tinted_pixmap(name, size, selected), QIcon.Mode.Normal,
-                       QIcon.State.On)
+        _add(icon, name, size, selected, QIcon.Mode.Selected)
+        # QIcon.On maps checkable-button "checked" through Selected-like
+        # coloring too, for engines that key off State rather than Mode.
+        _add(icon, name, size, selected, QIcon.Mode.Normal, QIcon.State.On)
     if disabled:
-        icon.addPixmap(tinted_pixmap(name, size, disabled), QIcon.Mode.Disabled)
+        _add(icon, name, size, disabled, QIcon.Mode.Disabled)
     return icon
 
 
 def simple_icon(name: str, size: int, color: str) -> QIcon:
-    """A single-color QIcon with no per-mode variation - for a static
-    label glyph whose color never changes."""
+    """A single-color QIcon with no per-mode variation - for places (e.g.
+    a static label icon) where the icon's color never needs to change."""
     icon = QIcon()
-    icon.addPixmap(tinted_pixmap(name, size, color))
+    _add(icon, name, size, color)
     return icon
-
-
-def themed(name: str, size: int, role: str = "default") -> QIcon:
-    """The normal way to ask for an icon: by semantic role, resolved
-    against whatever theme is active right now."""
-    from app.ui.design.theme import theme_manager
-
-    palette = theme_manager.palette
-    normal, active, selected, disabled = _ICON_ROLE_COLORS[role]
-    return icon_set(
-        name, size,
-        normal=palette.color(normal),
-        active=palette.color(active),
-        selected=palette.color(selected),
-        disabled=palette.color(disabled),
-    )
-
-
-def themed_pixmap(name: str, size: int, role: str = "default") -> QPixmap:
-    """A single tinted pixmap in the active theme, for label glyphs and
-    hand-painted delegates."""
-    from app.ui.design.theme import theme_manager
-
-    return tinted_pixmap(
-        name, size, theme_manager.palette.color(_ICON_ROLE_COLORS[role][0])
-    )
-
-
-_asset_cache: dict[tuple[str, int, str], str] = {}
-
-
-def theme_asset_url(name: str, size: int, color: str) -> str:
-    """A tinted PNG on disk, as a URL for QSS `image:` properties.
-
-    QSS cannot draw a shape, and Qt's Fusion style silently drops the
-    native QComboBox arrow once any subcontrol is styled - so the arrow
-    has to come back as a real image file. Written once per
-    (name, size, color) into the temp directory and reused; a theme
-    switch requests a different color and therefore a different file.
-    """
-    key = (name, size, color)
-    cached = _asset_cache.get(key)
-    if cached is not None:
-        return cached
-
-    safe = color.lstrip("#")
-    path = Path(tempfile.gettempdir()) / f"unified_{name}_{size}_{safe}.png"
-    if not path.exists():
-        tinted_pixmap(name, size, color).save(str(path), "PNG")
-    url = path.as_posix()
-    _asset_cache[key] = url
-    return url

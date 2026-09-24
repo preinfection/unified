@@ -1,12 +1,20 @@
 """In-app toast notifications: a small stack of auto-dismissing cards
 anchored to the window's top-right corner.
 
-Translated from the visual reference's Notify() pattern - an accent-
-striped card that slides in from the edge and carries a countdown bar
-that shrinks over its lifetime - adapted to live *inside* the app window
+A card that slides in from the edge and carries a countdown bar that
+shrinks over its lifetime, living *inside* the app window
 as a child overlay rather than a separate top-level popup, so a toast
 can never outlive the window, never gets its own taskbar entry, and needs
-no OS-level notification permission. Desktop "new mail arrived" alerts
+no OS-level notification permission.
+
+NO ACCENT STRIPE. This card used to carry a 3px colored bar down its left
+edge. A colored side-stripe is decoration standing in for meaning, and it
+placed the only hue on the card in the spot least likely to be read. The
+kind is carried by a leading dot in the semantic color instead: it sits
+directly beside the title where the eye already is, and being a shape as
+well as a hue it survives color blindness and a glance from the corner of
+the eye. The countdown bar keeps the same color, so the card still reads
+as one object. Desktop "new mail arrived" alerts
 still go through Notifier (system tray); this is for things worth saying
 while the window already has focus - sync errors, remove-account
 confirmations, database-repair notices - that would otherwise be easy to
@@ -29,9 +37,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from app.ui import theme as t
-from app.ui.design import motion
-from app.ui.design.motion import ValueAnimator
+from app.ui import motion, theme as t
 
 
 class _CountdownBar(QWidget):
@@ -65,6 +71,32 @@ class _CountdownBar(QWidget):
         painter.drawRoundedRect(0, 0, width, self.height(), 1, 1)
 
 
+_DOT_SIZE = 8
+
+
+class _KindDot(QWidget):
+    """The toast's kind, as a shape in a semantic color.
+
+    A painted circle rather than an SVG from assets/icons: there is no
+    icon in the set that means "info" or "success" at 8px, and a glyph
+    that small stops being a glyph anyway. What matters here is that the
+    signal has an outline at all, so it is not carried by hue alone.
+    """
+
+    def __init__(self, color: QColor, parent=None):
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(_DOT_SIZE, _DOT_SIZE)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._color)
+        painter.drawEllipse(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
+        painter.end()
+
+
 class _ToastCard(QWidget):
     def __init__(self, title: str, message: str, kind: str,
                  duration_ms: int, on_dismiss, parent=None):
@@ -80,30 +112,37 @@ class _ToastCard(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # The accent stripe is painted in paintEvent alongside the card
-        # surface (clipped to the same rounded path) rather than being a
-        # child widget - a child with its own border-radius can't follow
-        # the parent's rounded corner cleanly, and it left a visible
-        # square notch at the card's top-left and bottom-left.
-        outer.addSpacing(t.TOAST_STRIPE_WIDTH)
-
         body = QWidget()
         col = QVBoxLayout(body)
-        col.setContentsMargins(t.SPACE_MD, t.SPACE_SM + 1, t.SPACE_SM + 2, t.SPACE_SM)
-        col.setSpacing(2)
+        col.setContentsMargins(t.SPACE_MD + 2, t.SPACE_MD, t.SPACE_MD, t.SPACE_MD - 2)
+        col.setSpacing(3)
+
+        # Title row: the kind dot, then the title. The dot is the shape
+        # half of the signal; the title stays in primary text so the
+        # sentence is legible rather than tinted.
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(t.SPACE_SM)
+        head.addWidget(_KindDot(color), 0, Qt.AlignmentFlag.AlignVCenter)
 
         title_label = QLabel(title)
         title_label.setFont(t.make_font("status"))
-        title_label.setStyleSheet(f"color: {color.name()};")
+        t.role(title_label, "primary")
         title_label.setWordWrap(True)
-        col.addWidget(title_label)
+        head.addWidget(title_label, 1)
+        col.addLayout(head)
 
         if message:
             msg_label = QLabel(message)
             msg_label.setFont(t.make_font("caption"))
-            msg_label.setStyleSheet(f"color: {t.TEXT_SECONDARY};")
+            t.role(msg_label, "secondary")
             msg_label.setWordWrap(True)
-            col.addWidget(msg_label)
+            # Indented to the title's left edge, past the dot column, so the
+            # two lines read as one block instead of a hanging paragraph.
+            msg_row = QHBoxLayout()
+            msg_row.setContentsMargins(_DOT_SIZE + t.SPACE_SM, 0, 0, 0)
+            msg_row.addWidget(msg_label)
+            col.addLayout(msg_row)
 
         col.addSpacing(4)
         self._bar = _CountdownBar(color)
@@ -131,23 +170,37 @@ class _ToastCard(QWidget):
         self._dismiss_timer.start(duration_ms)
 
         self._slide = QPropertyAnimation(self, b"pos", self)
-        self._slide.setEasingCurve(motion.EASE_SMOOTH_OUT)
-        # Entrance: rise from below through a soft blur while the card
-        # scales up from 0.97, so it materialises rather than appearing.
-        self._enter = ValueAnimator(self, 1.0, motion.TOAST_OPEN,
-                                    motion.EASE_SMOOTH_OUT)
-        self._enter.to(0.0)
-        self._leaving = ValueAnimator(self, 0.0, motion.TOAST_CLOSE,
-                                      motion.EASE_SMOOTH_OUT)
+        self._slide.setEasingCurve(motion.curve())
 
         self._dismissed = False
 
+    def restart_timer(self, duration_ms: int) -> None:
+        """Give this card its full life again.
+
+        Used when the identical notice arrives a second time - see
+        ToastHost.show. A fault that keeps recurring keeps its card on
+        screen, which is what the repeat actually means, instead of
+        stacking another copy of the same sentence beneath it.
+        """
+        if self._dismissed:
+            return
+        self._dismiss_timer.stop()
+        self._dismiss_timer.start(duration_ms)
+        self._countdown.stop()
+        self._countdown.setDuration(duration_ms)
+        self._countdown.setStartValue(1.0)
+        self._countdown.setEndValue(0.0)
+        self._countdown.start()
+
     def slide_to(self, point: QPoint, *, animate: bool = True) -> None:
-        if not animate:
+        # The caller's `animate` AND the app-wide setting: a notice
+        # that still slides in from the edge under reduced motion is
+        # the largest movement left in the product.
+        if not animate or not motion.motion_enabled():
             self.move(point)
             return
         self._slide.stop()
-        self._slide.setDuration(motion.TOAST_OPEN)
+        self._slide.setDuration(t.TOAST_SLIDE_MS)
         self._slide.setStartValue(self.pos())
         self._slide.setEndValue(point)
         self._slide.start()
@@ -165,16 +218,6 @@ class _ToastCard(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Entrance / exit: rise + scale, applied to the whole card.
-        progress = max(self._enter.value, self._leaving.value)
-        if progress > 0.001:
-            painter.setOpacity(max(0.0, 1.0 - progress))
-            scale = 1.0 - (1.0 - motion.SCALE_MEDIUM) * progress
-            centre = QRectF(self.rect()).center()
-            painter.translate(centre.x(), centre.y() + motion.DISTANCE_TOAST * progress)
-            painter.scale(scale, scale)
-            painter.translate(-centre.x(), -centre.y())
-
         radius = t.RADIUS_MD
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = QPainterPath()
@@ -182,17 +225,6 @@ class _ToastCard(QWidget):
 
         # Opaque surface first - nothing behind the toast may show through.
         painter.fillPath(path, self._surface_color)
-
-        # Accent stripe down the left edge, clipped to the same rounded
-        # path so it curves with the corners instead of squaring them off.
-        painter.save()
-        painter.setClipPath(path)
-        painter.fillRect(
-            QRectF(rect.left(), rect.top(),
-                   float(t.TOAST_STRIPE_WIDTH), rect.height()),
-            self._accent_color,
-        )
-        painter.restore()
 
         painter.setPen(QPen(t.qcolor(t.TOAST_BORDER), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -215,13 +247,13 @@ class _ToastCard(QWidget):
         self._countdown.stop()
         if self._on_dismiss:
             self._on_dismiss(self)
-        # Leaves the way it arrived - down and out, not sideways.
-        # Same path in both directions, faster on the way out.
-        self._leaving.set_now(0.0)
-        self._leaving.to(1.0)
-        QTimer.singleShot(
-            max(1, t.duration(motion.TOAST_CLOSE)), self.deleteLater
-        )
+        exit_x = self.parent().width() if self.parent() else self.x() + self.width()
+        self._slide.stop()
+        self._slide.setDuration(t.TOAST_SLIDE_MS)
+        self._slide.setStartValue(self.pos())
+        self._slide.setEndValue(QPoint(exit_x, self.y()))
+        self._slide.finished.connect(self.deleteLater)
+        self._slide.start()
 
 
 class ToastHost(QObject):
@@ -229,8 +261,20 @@ class ToastHost(QObject):
     ToastHost(main_window) and call .show(...) from anywhere; toasts are
     parented to the window so they're clipped to it and destroyed with it.
 
-    An event filter on the window keeps the stack pinned to the top-right
-    corner across resizes/moves instead of a one-shot geometry calc.
+    An event filter on the window keeps the stack pinned to its corner
+    across resizes/moves instead of a one-shot geometry calc.
+
+    BOTTOM-RIGHT, NOT TOP-RIGHT, AND THIS IS A CORRECTNESS FIX RATHER THAN
+    A PREFERENCE. The stack used to sit at y=TOAST_MARGIN, which is inside
+    the toolbar: a sync-error toast covered the search field and the
+    refresh and console buttons for four and a half seconds. Notifications
+    do not get to sit on top of the controls, least of all the focused one
+    - a toast over a focused text field is the "focus obscured" failure
+    exactly. The bottom-right corner covers nothing, and is where desktop
+    applications already put transient notices.
+
+    Newest sits closest to the corner and older ones are pushed upward, so
+    a placed toast only ever moves when one below it leaves.
     """
 
     def __init__(self, window: QWidget):
@@ -239,8 +283,36 @@ class ToastHost(QObject):
         self._toasts: list[_ToastCard] = []
         window.installEventFilter(self)
 
+    #: Cards on screen whose title and body match exactly, keyed so a
+    #: repeat can find and refresh one instead of stacking another.
+    def _find_duplicate(self, title: str, message: str):
+        for card in self._toasts:
+            if card.property("toastKey") == (title, message):
+                return card
+        return None
+
     def show(self, title: str, message: str = "", *, kind: str = "info",
-              duration_ms: int | None = None) -> None:
+             duration_ms: int | None = None) -> None:
+        """Raise a notice, or refresh the identical one already showing.
+
+        REPEATS DO NOT STACK. Several of the events that reach here are
+        per-account: three connected accounts whose stored sign-in has
+        expired produce three RemoteActionWorker failures with the same
+        title and the same body within a few hundred milliseconds, and the
+        corner filled with three copies of one sentence. That is not more
+        information, it is the same information three times, and it is the
+        one case where a notification system most needs to be quiet.
+
+        The existing card's dismiss timer restarts instead, so a fault
+        that keeps recurring keeps its notice on screen - which is the
+        behaviour that actually wanted, rather than a queue of identical
+        cards the user has to sit through.
+        """
+        existing = self._find_duplicate(title, message)
+        if existing is not None:
+            existing.restart_timer(duration_ms or t.TOAST_DEFAULT_DURATION_MS)
+            return
+
         card = _ToastCard(
             title, message, kind,
             duration_ms or t.TOAST_DEFAULT_DURATION_MS,
@@ -252,6 +324,7 @@ class ToastHost(QObject):
         # around to it, which otherwise raced two toasts arriving close
         # together into the same stack slot (both read the same stale,
         # pre-layout height and landed on top of each other).
+        card.setProperty("toastKey", (title, message))
         card.adjustSize()
         # Enter from just off the right edge of the window.
         start_x = self._window.width()
@@ -269,31 +342,39 @@ class ToastHost(QObject):
             self._toasts.remove(card)
         self._relayout(animate=True)
 
-    def _stack_top(self) -> int:
-        """Where the stack begins so that the newest card sits one margin
-        above the bottom edge. Anchoring to the bottom keeps toasts clear
-        of the command bar and the reading pane's action row, which live
-        along the top edge - a top-right toast lands directly on top of
-        Reply/Delete."""
-        total = sum(card.height() for card in self._toasts)
-        total += t.TOAST_SPACING * max(0, len(self._toasts) - 1)
-        return max(t.TOAST_MARGIN, self._window.height() - t.TOAST_MARGIN - total)
+    def _bottom_inset(self) -> int:
+        """How much of the window's bottom edge is already spoken for.
+
+        The status bar is a real widget with real text in it, so stacking
+        over it would just trade one occlusion for another.
+        """
+        inset = t.TOAST_MARGIN
+        status = getattr(self._window, "statusBar", None)
+        if callable(status):
+            try:
+                bar = status()
+                if bar is not None and bar.isVisible():
+                    inset += bar.height()
+            except RuntimeError:
+                pass  # the window is being torn down under us
+        return inset
 
     def _next_y(self) -> int:
-        y = self._stack_top()
+        """Where a card about to be added will come to rest."""
+        y = self._window.height() - self._bottom_inset()
         for card in self._toasts:
-            y += card.height() + t.TOAST_SPACING
+            y -= card.height() + t.TOAST_SPACING
         return y
 
     def _relayout(self, *, animate: bool) -> None:
-        # Oldest at the top of the stack, newest along the bottom, so a
-        # new toast never shoves the one being read out from under the
-        # pointer.
-        y = self._stack_top()
         x = self._window.width() - t.TOAST_WIDTH - t.TOAST_MARGIN
-        for card in self._toasts:
+        y = self._window.height() - self._bottom_inset()
+        # Reversed: the newest card is last in the list and belongs
+        # closest to the corner, with older ones stacking upward above it.
+        for card in reversed(self._toasts):
+            y -= card.height()
             card.slide_to(QPoint(x, y), animate=animate)
-            y += card.height() + t.TOAST_SPACING
+            y -= t.TOAST_SPACING
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         # Defensive: PySide6/shiboken can dispatch a queued event to this

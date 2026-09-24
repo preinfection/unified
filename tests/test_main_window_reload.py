@@ -115,6 +115,8 @@ def window(qapp, seeded_db, monkeypatch, tmp_path):
     for worker in list(win.sync._workers.values()):
         worker.request_stop()
         worker.wait(2000)
+    win.close()
+    win.deleteLater()
 
 
 # --------------------------------------------------------------- pagination
