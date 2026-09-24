@@ -81,7 +81,7 @@ class TopToolBar(Toolbar):
         self.refresh_btn.clicked.connect(self.refresh_clicked.emit)
 
         self.console_btn = IconButton(
-            "console", "Show or hide the activity log", checkable=True, parent=self
+            "console", "Show or hide the console", checkable=True, parent=self
         )
         self.console_btn.toggled.connect(self.console_toggled.emit)
 

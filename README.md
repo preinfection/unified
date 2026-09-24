@@ -6,13 +6,18 @@ Built with Python, PySide6, and SQLite, Unified focuses on a modern desktop expe
 
 ## Features
 
-* Multiple Gmail and IMAP accounts in one inbox
+* Multiple Gmail and IMAP accounts in one inbox, or any one account on its own
+* Folders in a dock at the top of the window; accounts in the sidebar, with
+  "All accounts" first
 * Fast local search, with server-side search for older mail
 * Offline access to cached messages
 * Reply, reply-all and forward, with correct recipient handling
 * Full keyboard control - press `?` in the app for the list
-* Warm dark and light themes, and comfortable or compact message rows
+* Warm dark and light themes, switched from a sun/moon control, and
+  comfortable or compact message rows
 * A collapsible sidebar that gets out of the way on a narrow window
+* A quiet notice in the toolbar when a newer release is published, and the
+  release notes in Settings > Changelog
 * Modern native Windows desktop interface
 * Encrypted local email cache
 * Background syncing that never blocks the interface
@@ -85,7 +90,7 @@ Available actions:
 * Star, mark read or unread, and manage messages
 * Compose, reply, reply-all and forward (plain text)
 * Load older messages on demand with **Load more**
-* Monitor sync progress and errors from the console
+* Monitor sync progress and errors from the console (the terminal icon)
 
 ### Keyboard
 
@@ -94,6 +99,7 @@ Unified is usable without the mouse. Press `?` or `F1` for the full list.
 | Key | Action |
 | --- | ------ |
 | `j` / `k` or arrows | Next / previous message |
+| `Ctrl+1` ... `Ctrl+4` | Inbox, Starred, Sent, Trash |
 | `Enter` | Open the focused message |
 | `s` | Star or unstar |
 | `u` | Mark unread |
@@ -107,6 +113,8 @@ Unified is usable without the mouse. Press `?` or `F1` for the full list.
 | `Ctrl+,` | Settings |
 
 Single-letter shortcuts stand down while you are typing in a text field.
+`Tab` reaches the dock and the account list; the arrow keys move within
+them and `Enter` chooses.
 
 ## How it works
 
@@ -153,6 +161,11 @@ mail on demand.
   [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full threat model -
   stated plainly, including what this does *not* protect against.
 * Logs do not contain passwords, tokens, or private message content.
+* Besides your mail providers, Unified talks to one other service: GitHub's
+  public releases API, at most once an hour and never during startup, to
+  see whether a newer version exists, and to fetch release notes when
+  Settings > Changelog is opened. No account or mail data is sent; like
+  any web request, GitHub sees your IP address and the app's version.
 
 ### Protections against hostile mail
 
@@ -205,7 +218,6 @@ anywhere in the app.
 * Google OAuth requires your own `credentials.json`
 * Attachments are listed and safety-checked, but cannot be saved yet
 * Email composition currently supports plain text only
-* Per-account views are currently inbox-focused
 * There is no Archive: the folder vocabulary is inbox, sent and trash
   only, so messages are kept, starred or trashed
 * HTML email is rendered by Qt's rich-text engine, which has no support

@@ -556,7 +556,7 @@ def test_the_page_lists_newest_first_and_marks_this_copy(qapp, notes_path):
     assert wait_for(lambda: len(page.entries) == 3)
     assert [e.release.version for e in page.entries] == ["1.5.0", "1.4.0", "1.3.0"]
     markers = [e.marker.text() for e in page.entries]
-    assert markers == ["Newer than this copy", "This copy", ""]
+    assert markers == ["Newer", "Your version", ""]
     assert "v1.4.0" in page.status.text()
     page.close()
 

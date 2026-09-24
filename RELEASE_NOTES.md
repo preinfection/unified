@@ -16,6 +16,76 @@ layers behaves as it did in v1.2.1, apart from the two additions noted
 under *Backend* below, both of which exist to support features in this
 release.
 
+### Folders in a dock, accounts in the sidebar
+
+The sidebar answered two questions in one list - which folder, and whose
+mail - and the answers took turns: choosing an account un-chose the
+folder. Inbox, Starred, Sent and Trash now sit in a dock centred in the
+toolbar, with Add account and Settings after a divider; the sidebar is
+"All accounts" and one row per account. Both are always shown and both
+can be true at once, so "work@company.com's Sent" is a place you can be.
+The window owns that location and tells the two widgets, rather than
+each keeping its own copy - which is how the old drawer once showed a
+folder and an account selected together.
+
+The dock magnifies toward the pointer (adapted from Magic UI's Dock, at
+1.25x rather than 1.5x) through an overdamped spring, inside a reserved
+box so nothing else in the toolbar ever moves. The selected folder is one
+surface that slides. The inbox's unread count is a badge on the dock that
+follows the account in view. `Ctrl+1` to `Ctrl+4` jump to the folders;
+`Tab`, the arrow keys and `Enter` work through the dock and the account
+list.
+
+With no accounts connected, the window no longer reserves a blank reading
+pane beside the offer to add one, and search, sync and compose are
+disabled with a line saying why. The search field is sized to a query
+instead of spanning the window.
+
+### The rest of the interaction pass
+
+Each adapted from a Magic UI component and cut down to what the product
+can justify:
+
+- **Theme** is a sun/moon control in Settings > Appearance instead of a
+  dropdown. It applies at once and the new theme spreads out from the
+  control across every open window; Cancel puts it back.
+- **Console** is a quiet terminal-style log: aligned time, level, source
+  and message columns, colour only on warnings and errors, batched so a
+  burst of a thousand lines is one repaint, and a steady prompt while it
+  is following new output.
+- **Reply and forward** type the quoted original in beneath the cursor.
+  The whole text is in the message from the first frame, and any
+  keystroke, click or paste ends the reveal at once.
+- **Updates**: GitHub's releases are checked at most hourly, never during
+  startup and never blocking anything. When a newer version exists, an
+  "Update" button appears in the toolbar and opens its release page; a
+  glint crosses it once when it appears. Settings > Changelog lists every
+  published release.
+- **Opening**: a slowly turning dotted globe, then the name, then the
+  mailbox. It never delays a startup that is already finished.
+- **Smooth pointer**, experimental and off by default. A smoothed pointer
+  trails the real one (about 54ms here), so it steps aside over text,
+  handles and drags.
+
+Every animation has a reduced-motion state that is its final state.
+
+### Fixed in the same pass
+
+- Collapsing the sidebar to its rail left a 192px dead strip instead of
+  giving the width to the list and the reading pane.
+- After switching to the light theme, the selected account row kept a
+  dark-mode background, and every avatar drew a near-white initial on a
+  pale disc.
+- Icons were rasterized at 1x only and drawn soft at 125-200% scaling.
+- The reading pane kept showing a message after moving to a folder that
+  does not contain it.
+- A message body that was a single unterminated HTML tag rendered as
+  nothing on current Python versions.
+- Closing the window within 400ms of opening could start a sync
+  afterwards on threads nothing waited for.
+
+Tests: 412 to 586.
+
 ### The keyboard works
 
 `app/ui/shortcuts.py` was complete, documented, and imported by nothing.

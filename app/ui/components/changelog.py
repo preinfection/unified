@@ -195,9 +195,10 @@ def _styled(html_text: str) -> str:
     """Give each element the app's type and ink INLINE.
 
     QLabel's rich-text engine keeps its own built-in heading sizes and
-    ignores a <style> block's font-size for them, which made a heading
-    inside the notes as large as the release title above it. Inline style
-    attributes are honoured, so the tokens land exactly.
+    ignores CSS font-size on heading tags, which made a heading inside the
+    notes as large as the release title above it. Inline styles on
+    ordinary elements are honoured, so headings are rendered as styled
+    paragraphs and the tokens land exactly.
     """
     styles = {
         "p": f"margin: 0 0 {t.SPACE_SM}px 0;",
@@ -214,7 +215,14 @@ def _styled(html_text: str) -> str:
         "pre": f"font-family: {t.FONT_MONO_CSS}; font-size: {t.SIZE_SM}px;",
     }
     for tag, style in styles.items():
-        html_text = html_text.replace(f"<{tag}>", f'<{tag} style="{style}">')
+        if tag.startswith("h"):
+            # Headings become styled paragraphs: Qt applies its own size
+            # step to <h2>/<h3> on top of any CSS, so a real heading tag
+            # can never be made as small as the hierarchy needs.
+            html_text = html_text.replace(f"<{tag}>", f'<p style="{style}">')
+            html_text = html_text.replace(f"</{tag}>", "</p>")
+        else:
+            html_text = html_text.replace(f"<{tag}>", f'<{tag} style="{style}">')
     return html_text
 
 
@@ -242,10 +250,11 @@ class _Entry(QWidget):
         left.addWidget(date)
         note = ""
         if is_newer(release.tag, current):
-            note = "Newer than this copy"
+            note = "Newer"
         elif parse_version(release.tag) == parse_version(current):
-            note = "This copy"
+            note = "Your version"
         self.marker = QLabel(note)
+        self.marker.setWordWrap(True)
         self.marker.setFont(t.make_font("caption"))
         t.role(self.marker, "secondary")
         self.marker.setVisible(bool(note))

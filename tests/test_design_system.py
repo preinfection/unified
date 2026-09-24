@@ -484,3 +484,31 @@ def test_avatar_initials_are_legible_in_both_themes(qapp):
                 assert ratio >= 4.5, f"{mode} step {step}: initial at {ratio:.2f}:1"
     finally:
         t.apply_mode("dark")
+
+
+def test_the_dock_is_legible_in_both_themes():
+    """The unread count is text on a neutral pill, and the glyphs are
+    non-text controls; both measured on the surfaces they actually sit on,
+    in both modes, rather than assumed from the palette."""
+
+    def luminance(c: QColor) -> float:
+        def ch(v: int) -> float:
+            v = v / 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
+
+    def ratio(a: str, b: str) -> float:
+        hi, lo = sorted((luminance(QColor(a)), luminance(QColor(b))), reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+
+    try:
+        for mode in ("dark", "light"):
+            t.apply_mode(mode)
+            assert ratio(t.TEXT_ON_ACCENT, t.TEXT_SECONDARY) >= 4.5, f"{mode}: badge text"
+            assert ratio(t.TEXT_SECONDARY, t.BG_PANEL) >= 3.0, f"{mode}: badge on the pill"
+            assert ratio(t.ICON_SECONDARY, t.BG_PANEL) >= 3.0, f"{mode}: resting glyph"
+            assert ratio(t.ICON_SELECTED, t.BG_SELECTED) >= 3.0, f"{mode}: selected glyph"
+            assert ratio(t.WARNING, t.BG_APP) >= 4.5, f"{mode}: console WARN tag"
+            assert ratio(t.ERROR, t.BG_APP) >= 4.5, f"{mode}: console ERROR tag"
+    finally:
+        t.apply_mode("dark")

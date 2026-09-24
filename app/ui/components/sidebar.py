@@ -86,6 +86,9 @@ class SidebarWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # The rows take focus; the container around them must not, or Tab
+        # stops once on something with no visible focus at all.
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._accounts_container = QWidget()
         self._accounts_layout = QVBoxLayout(self._accounts_container)
