@@ -80,9 +80,13 @@ def test_the_selection_surface_travels_between_folders(dock, qapp):
     start = dock.selection_rect().toRect()
 
     dock.set_current_folder("trash")
-    settle(40)
+    # Caught at a fixed point of the animation, not after a sleep: a busy
+    # machine must not be able to turn "it travelled" into a flake.
+    anim = dock._sel_anim
+    assert anim is not None, "the surface did not animate"
+    anim.setCurrentTime(anim.duration() // 4)
     midway = dock.selection_rect().toRect()
-    settle(400)
+    anim.setCurrentTime(anim.duration())
     end = dock.selection_rect().toRect()
 
     trash = dock.cell_rect_in_dock(dock.item("trash")).toRect()

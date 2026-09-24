@@ -547,33 +547,54 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{ background: {t.ACCENT}; border-radius: {t.RADIUS_XS}px; }}
 
-/* ---- Console filter pills ---- */
+/* ---- Console (console.py) ----
+   A title strip on the chrome surface, one hairline, and the log on the
+   app floor - the same two surfaces and one line as the toolbar above the
+   list. The filters are a row of quiet chips whose checked state is the
+   raised step, exactly like every other selection in the app; they were
+   pills with a 999px radius, which Qt renders as square corners. */
+QWidget#consolePanel {{ background: {t.BG_APP}; }}
+QWidget#consoleStrip {{
+    background: {t.BG_SIDEBAR};
+    border: none;
+    border-bottom: 1px solid {t.BORDER};
+}}
 QPushButton#consoleFilter {{
     background: transparent;
-    border: 1px solid {t.BORDER};
-    border-radius: {t.RADIUS_PILL}px;
-    padding: 3px 11px;
-    font-size: {t.SIZE_XS}px;
-    font-weight: {t.WEIGHT_SEMIBOLD};
+    border: 1px solid transparent;
+    border-radius: {t.RADIUS_SM}px;
+    padding: 3px 9px;
+    min-height: 16px;
+    font-weight: {t.WEIGHT_MEDIUM};
     color: {t.TEXT_TERTIARY};
 }}
 QPushButton#consoleFilter:hover {{ background: {t.BG_HOVER}; color: {t.TEXT_PRIMARY}; }}
 QPushButton#consoleFilter:checked {{
     background: {t.BG_SELECTED};
-    border-color: {t.BORDER_LIGHT};
     color: {t.TEXT_PRIMARY};
 }}
-
-/* ---- Console ---- */
-QPlainTextEdit#console {{
-    border: 1px solid {t.BORDER};
+QPushButton#consoleFilter:focus {{ border-color: {t.FOCUS_RING}; }}
+QPushButton#consoleAction {{
+    background: transparent;
+    color: {t.TEXT_SECONDARY};
+    border: 1px solid transparent;
     border-radius: {t.RADIUS_SM}px;
+    padding: 3px 10px;
+    min-height: 16px;
+    font-weight: {t.WEIGHT_MEDIUM};
+}}
+QPushButton#consoleAction:hover {{ background: {t.BG_HOVER}; color: {t.TEXT_PRIMARY}; }}
+QPushButton#consoleAction:focus {{ border-color: {t.FOCUS_RING}; }}
+QTextEdit#console {{
+    border: none;
+    border-radius: 0;
     background: {t.BG_APP};
     color: {t.TEXT_SECONDARY};
-    font-family: {t.FONT_MONO_CSS};
-    font-size: {t.SIZE_SM}px;
-    padding: 10px;
+    padding: 0;
+    selection-background-color: {t.BG_SELECTED};
+    selection-color: {t.TEXT_PRIMARY};
 }}
+QTextEdit#console:focus {{ border: none; background: {t.BG_APP}; }}
 
 /* ---- Misc ---- */
 /* min-height, not just padding: the status line was being clipped against

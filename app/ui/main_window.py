@@ -619,7 +619,7 @@ class MainWindow(QMainWindow):
         self.console.setVisible(visible)
         total = sum(self._vertical_splitter.sizes()) or self.height()
         if visible:
-            self._vertical_splitter.setSizes([max(1, total - 220), 220])
+            self._vertical_splitter.setSizes([max(1, total - 260), 260])
         else:
             self._vertical_splitter.setSizes([total, 0])
 

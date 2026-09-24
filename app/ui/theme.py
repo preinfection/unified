@@ -491,7 +491,13 @@ def make_font(preset: str, *, italic: bool = False) -> QFont:
     """
     size, weight, spacing = TYPOGRAPHY[preset]
     font = QFont()
-    font.setFamilies(FONT_MONO if preset in MONO_PRESETS else FONT_FAMILIES)
+    mono = preset in MONO_PRESETS
+    font.setFamilies(FONT_MONO if mono else FONT_FAMILIES)
+    # The style hint is stated, not inherited. A QPainter resolves an
+    # unset hint from the device it paints on, so a sans preset drawn onto
+    # a monospace surface (the console's empty state) came out in whatever
+    # monospace face the fallback found.
+    font.setStyleHint(QFont.StyleHint.Monospace if mono else QFont.StyleHint.SansSerif)
     font.setPixelSize(size)
     font.setWeight(QFont.Weight(weight))
     if spacing is not None:

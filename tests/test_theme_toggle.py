@@ -74,16 +74,22 @@ def test_the_surface_rests_under_the_current_theme(qapp):
 
 
 def test_the_surface_slides_when_motion_is_on(qapp):
+    """Sampled at a fixed point of the animation rather than after a
+    wall-clock sleep, so a busy machine cannot turn it into a flake."""
+    from PySide6.QtCore import QAbstractAnimation
+
     motion.set_motion_enabled(True)
     toggle = ThemeToggle("dark")
     toggle.show()
     toggle.click()
-    settle(40)
+    anim = toggle._anim
+    assert anim.state() == QAbstractAnimation.State.Running, "it did not animate"
+    anim.setCurrentTime(anim.duration() // 4)
     mid = toggle.knob_rect().x()
-    settle(400)
     assert toggle.segment_rect(0).x() < mid < toggle.segment_rect(1).x(), (
         "the surface jumped instead of sliding"
     )
+    anim.setCurrentTime(anim.duration())
     assert toggle.knob_rect() == toggle.segment_rect(0)
 
 
