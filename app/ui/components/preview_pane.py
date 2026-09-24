@@ -174,6 +174,7 @@ class _EmptyState(QWidget):
         col.addStretch(6)
 
     def set_text(self, title: str, detail: str) -> None:
+        self.silent = False
         self._title.setText(title)
         self._title.setVisible(bool(title))
         self._detail.setText(detail)
@@ -187,6 +188,7 @@ class _EmptyState(QWidget):
         would compete with it.
         """
         if silent:
+            self.silent = True
             self._title.setVisible(False)
             self._detail.setVisible(False)
         else:
@@ -443,6 +445,13 @@ class PreviewPane(QWidget):
 
     def is_showing_message(self) -> bool:
         return self._stack.currentWidget() is not self._empty
+
+    def is_blank(self) -> bool:
+        """True only for the silent pane (see show_nothing) - not for a
+        placeholder that is explaining something, like a message that was
+        deleted on the server."""
+        return (self._stack.currentWidget() is self._empty
+                and getattr(self._empty, "silent", False))
 
     def reset(self) -> None:
         """Back to the default "nothing selected" state."""

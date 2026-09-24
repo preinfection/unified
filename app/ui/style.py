@@ -395,23 +395,6 @@ QComboBox[invalid="true"], QSpinBox[invalid="true"] {{
     border-color: {t.DESTRUCTIVE};
 }}
 
-/* Flat icon-style toolbar buttons (Refresh/Console) */
-QPushButton#iconButton {{
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: {t.RADIUS_SM}px;
-    padding: 6px;
-    font-weight: {t.WEIGHT_MEDIUM};
-}}
-QPushButton#iconButton:hover {{ background: {t.BG_HOVER}; border-color: {t.BORDER}; }}
-QPushButton#iconButton:pressed {{ background: {t.BG_PANEL}; }}
-QPushButton#iconButton:focus {{ border-color: {t.ACCENT}; }}
-QPushButton#iconButton:checkable:checked {{
-    background: {t.BG_SELECTED};
-    color: {t.TEXT_PRIMARY};
-    border-color: {t.BORDER_LIGHT};
-}}
-
 /* ---- Dock (components/dock.py) ----
    The dock paints its own pill, cells and selection from tokens; only its
    floating label is a styled widget. It matches the tooltip exactly, so a
@@ -505,19 +488,9 @@ QScrollBar::handle:horizontal {{
 QScrollBar::handle:horizontal:hover {{ background: {t.TEXT_TERTIARY}; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
-/* ---- Toolbar ---- */
-/* Flat, on the sidebar's surface, separated from the content by a single
-   hairline. It was a vertical gradient with a second accent-tinted hairline
-   glowing under the first; that is three devices to say "there is a line
-   here". */
-QToolBar {{
-    background: {t.BG_SIDEBAR};
-    border: none;
-    border-bottom: 1px solid {t.BORDER};
-    spacing: 8px;
-    padding: 10px 16px;
-}}
-QToolBar::separator {{ background: {t.BORDER}; width: 1px; margin: 5px 8px; }}
+/* ---- Toolbar ----
+   The top band is primitives.Toolbar (#toolbarBand, styled above), not a
+   QToolBar: it has to centre the dock, which a QToolBar cannot. */
 
 /* ---- Menus ---- */
 QMenu {{

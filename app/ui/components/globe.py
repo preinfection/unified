@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QElapsedTimer, QPointF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 

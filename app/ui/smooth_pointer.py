@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QElapsedTimer, QEvent, QObject, QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QElapsedTimer, QEvent, QObject, QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen, QWindow
 from PySide6.QtWidgets import (
     QAbstractSpinBox,

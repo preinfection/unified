@@ -559,3 +559,12 @@ def test_a_sync_tick_does_not_cut_a_slide_short(dock):
     dock.set_current_folder("trash", animate=False)      # the sync tick
     assert anim.state() == QAbstractAnimation.State.Running
     assert dock.selection_rect() == before, "the tick jumped the surface"
+
+
+def test_a_sync_tick_keeps_an_explanation_in_the_reading_pane(window):
+    """Only the blank pane is restored to "Select a message"; one saying a
+    message vanished on the server keeps saying it through sync ticks."""
+    win, db, a1, a2 = window
+    win.preview.show_placeholder("Message unavailable", "It was deleted.")
+    win.reload_email_list()
+    assert win.preview._empty._title.text() == "Message unavailable"

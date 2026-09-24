@@ -614,7 +614,6 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 5)
         splitter.setStretchFactor(1, 4)
         splitter.setSizes([660, 380])
-        self._pane_splitter = splitter
 
         # THE SIDEBAR IS BESIDE THE SPLITTER, NOT IN IT. It has a fixed
         # width - it is not user-resizable - so a splitter handle next to it
@@ -1085,9 +1084,11 @@ class MainWindow(QMainWindow):
             self.center_stack.setCurrentIndex(2)
             return
         self.center_stack.setCurrentIndex(0)
-        if not self.preview.is_showing_message():
+        if self.preview.is_blank():
             # Back from an empty folder: the pane was blank because there
-            # was nothing to pick. Now there is, so it says so.
+            # was nothing to pick. Now there is, so it says so. Only the
+            # BLANK pane - a placeholder explaining that a message was
+            # deleted on the server is left to say so.
             self.preview.reset()
 
     def _set_reading_pane_present(self, present: bool) -> None:

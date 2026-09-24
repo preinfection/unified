@@ -58,6 +58,7 @@ from PySide6.QtCore import (
     QElapsedTimer,
     QEvent,
     QPoint,
+    QPointF,
     QPropertyAnimation,
     QRectF,
     QSize,
@@ -740,8 +741,7 @@ class Dock(QWidget):
         # A real divider between "where" and "do", not a gap pretending.
         x = round(self.separator_x()) + 0.5
         painter.setPen(QPen(QColor(t.BORDER_LIGHT), 1.0))
-        painter.drawLine(QRectF(x, 13.0, 0.0, HEIGHT - 26.0).topLeft(),
-                         QRectF(x, 13.0, 0.0, HEIGHT - 26.0).bottomLeft())
+        painter.drawLine(QPointF(x, 13.0), QPointF(x, HEIGHT - 13.0))
         painter.end()
 
     def retheme(self) -> None:
