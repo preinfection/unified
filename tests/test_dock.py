@@ -543,3 +543,19 @@ def test_the_rail_gives_its_width_back_to_the_panes(window, qapp):
         f"the list starts at {collapsed_left}, the rail ends at {win.sidebar.width()}"
     )
     assert collapsed_left < list_left
+
+
+def test_a_sync_tick_does_not_cut_a_slide_short(dock):
+    """The window restates the location on every debounced sync tick; a
+    selection still sliding toward that folder must keep sliding."""
+    from PySide6.QtCore import QAbstractAnimation
+
+    motion.set_motion_enabled(True)
+    dock.set_current_folder("inbox", animate=False)
+    dock.set_current_folder("trash")
+    anim = dock._sel_anim
+    anim.setCurrentTime(anim.duration() // 4)
+    before = dock.selection_rect()
+    dock.set_current_folder("trash", animate=False)      # the sync tick
+    assert anim.state() == QAbstractAnimation.State.Running
+    assert dock.selection_rect() == before, "the tick jumped the surface"

@@ -599,9 +599,18 @@ class Dock(QWidget):
     def set_current_folder(self, key: str, *, animate: bool = True) -> None:
         if key not in self._folders:
             return
+        index = float(list(self._folders).index(key))
+        if key == self._current:
+            # Told again what it already shows - the window restates the
+            # location on every sync tick. A slide still under way toward
+            # this folder is left to finish rather than cut to its end.
+            self._sync_checked()
+            running = (self._sel_anim is not None and
+                       self._sel_anim.state() == QPropertyAnimation.State.Running)
+            if running or self._sel == index:
+                return
         self._current = key
         self._sync_checked()
-        index = float(list(self._folders).index(key))
         if self._sel_anim is not None:
             self._sel_anim.stop()
             self._sel_anim = None
