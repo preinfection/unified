@@ -117,6 +117,9 @@ DEFAULTS = {
     "reduced_motion": False,
     # Remembered sidebar width state, so the app opens the way it was left.
     "sidebar_collapsed": False,
+    # The experimental smoothed pointer (app/ui/smooth_pointer.py). Off:
+    # a smoothed pointer trails the real one, which costs precision.
+    "smooth_pointer": False,
 }
 
 

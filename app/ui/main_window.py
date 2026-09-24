@@ -72,6 +72,7 @@ from app.ui.native_theme import apply_dark_titlebar
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.shortcuts import ShortcutManager
 from app.ui.shortcuts_dialog import ShortcutsDialog
+from app.ui.smooth_pointer import SmoothPointer
 from app.ui import motion, theme as t
 from app.ui.svg_icon import simple_icon
 
@@ -227,6 +228,10 @@ class MainWindow(QMainWindow):
         self.release_notes = ReleaseNotesStore(
             config.app_data_dir() / "release_notes.json", self
         )
+        # Experimental, off unless chosen in Settings > Appearance; it steps
+        # aside over text, handles, drags and under reduced motion.
+        self.smooth_pointer = SmoothPointer(self)
+        self.smooth_pointer.set_enabled(bool(self.settings.get("smooth_pointer")))
         # A timer the window owns, not a fire-and-forget singleShot: a
         # window closed within the first 400ms must not start syncing
         # afterwards, on threads nothing will wait for.
@@ -1540,6 +1545,7 @@ class MainWindow(QMainWindow):
             # than assuming nothing visual changed.
             motion.set_motion_enabled(not bool(self.settings.get("reduced_motion")))
             self.set_theme_mode(str(self.settings.get("theme_mode") or "dark"))
+            self.smooth_pointer.set_enabled(bool(self.settings.get("smooth_pointer")))
             self.email_list.set_compact(bool(self.settings.get("compact_rows")))
             if dialog.accounts_changed:
                 remaining = {a["id"] for a in self.db.get_accounts()}
@@ -1558,6 +1564,7 @@ class MainWindow(QMainWindow):
         self._reload_timer.stop()
         self.updates.shutdown()
         self.release_notes.shutdown()
+        self.smooth_pointer.shutdown()
         if self._account_dialog is not None:
             self._account_dialog.shutdown()
             self._account_dialog.close()

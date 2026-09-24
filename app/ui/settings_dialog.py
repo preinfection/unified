@@ -335,6 +335,10 @@ class SettingsDialog(QDialog):
         self.motion_toggle.setAccessibleName("Reduce motion")
         self.motion_toggle.setChecked(bool(self.settings.get("reduced_motion")))
 
+        self.pointer_toggle = Toggle()
+        self.pointer_toggle.setAccessibleName("Smooth pointer (experimental)")
+        self.pointer_toggle.setChecked(bool(self.settings.get("smooth_pointer")))
+
         return _page(
             SectionHeader("Appearance"),
             _panel(
@@ -349,6 +353,11 @@ class SettingsDialog(QDialog):
                      "Transitions finish instantly instead of animating. "
                      "Nothing is hidden - every state still changes, it just "
                      "does not travel."),
+                _row("Smooth pointer (experimental)", self.pointer_toggle,
+                     "Draws the pointer with a glide inside Unified. It runs "
+                     "a few hundredths of a second behind the real one, so "
+                     "it steps aside over text, while dragging, and when "
+                     "motion is reduced."),
             ),
         )
 
@@ -481,4 +490,5 @@ class SettingsDialog(QDialog):
         self.settings.set("theme_mode", self.theme_toggle.mode())
         self.settings.set("compact_rows", bool(self.density_dropdown.value()))
         self.settings.set("reduced_motion", bool(self.motion_toggle.isChecked()))
+        self.settings.set("smooth_pointer", bool(self.pointer_toggle.isChecked()))
         self.accept()
