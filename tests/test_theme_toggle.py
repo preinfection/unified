@@ -157,6 +157,7 @@ def window(qapp, tmp_path, monkeypatch):
     qapp.processEvents()
     yield win, settings
     win.close()
+    win.deleteLater()
 
 
 def test_the_dropdown_is_gone_from_appearance(window):

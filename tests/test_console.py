@@ -42,7 +42,10 @@ def console(qapp):
     widget = ConsoleWidget()
     widget.resize(900, 260)
     widget.show()
-    qapp.processEvents()
+    # Earlier tests can leave a window whose deferred startup check logs a
+    # line a moment later; start every test from a quiet, empty pane.
+    settle()
+    widget._clear()
     yield widget
     widget.detach()
     widget.close()

@@ -71,6 +71,11 @@ def window(qapp, tmp_path, monkeypatch):
     for worker in list(win.sync._workers.values()):
         worker.request_stop()
         worker.wait(2000)
+    # Closed and released, not just left behind: every window a test leaves
+    # open is re-polished by every later setStyleSheet and grabbed by every
+    # later theme reveal, which made the suite slower with each test.
+    win.close()
+    win.deleteLater()
     # Leave the module-level palette AND the application stylesheet as the
     # rest of the suite expects them. Restoring only the palette leaves the
     # QApplication holding whichever QSS string the last test built, which

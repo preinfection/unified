@@ -190,7 +190,7 @@ class SettingsDialog(QDialog):
     theme_requested = Signal(str, object)
 
     def __init__(self, settings: config.Settings, manager: AccountManager,
-                 parent=None):
+                 parent=None, *, release_notes=None):
         super().__init__(parent)
         self.settings = settings
         self.manager = manager
@@ -235,6 +235,8 @@ class SettingsDialog(QDialog):
             ("lock", "Google"),
             ("person", "Accounts"),
         ]
+        if release_notes is not None:
+            rail_specs.append(("changelog", "Changelog"))
         rail_buttons = []
         for icon_name, label in rail_specs:
             btn = _RailItem(icon_name, label)
@@ -249,6 +251,11 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(self._build_appearance_page())
         self.stack.addWidget(self._build_google_page())
         self.stack.addWidget(self._build_accounts_page())
+        self.changelog = None
+        if release_notes is not None:
+            from app.ui.components.changelog import ChangelogPage
+            self.changelog = ChangelogPage(release_notes)
+            self.stack.addWidget(self.changelog)
         body.addWidget(self.stack, stretch=1)
         outer.addLayout(body, stretch=1)
 

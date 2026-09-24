@@ -31,11 +31,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app import config
+from app import __version__, config
 from app.database import Database
 from app.email import reply as reply_builder
 from app.services.account_manager import AccountManager
 from app.services.notifier import Notifier
+from app.services.updates import ReleaseNotesStore, UpdateChecker
 from app.services.sync_service import (
     PH_BODIES,
     PH_CONNECT,
@@ -63,6 +64,7 @@ from app.ui.components.sidebar import SidebarWidget
 from app.ui.components.toast import ToastHost
 from app.ui.components.primitives import Button, Variant
 from app.ui.components.toolbar import TopToolBar
+from app.ui.components.update_button import UpdateButton
 from app.ui.compose_dialog import ComposeDialog
 from app.ui.console import ConsoleWidget
 from app.ui.icons import make_app_icon
@@ -214,8 +216,26 @@ class MainWindow(QMainWindow):
         self._update_search_placeholder()
         self.reload_email_list()
         QTimer.singleShot(50, self._startup_integrity_check)
+
+        # Release information. The checker offers a remembered update from
+        # disk at once and asks GitHub at most hourly, on a thread, well
+        # after startup; the notes are fetched only if Settings > Changelog
+        # is opened. See app/services/updates.py.
+        self.updates = UpdateChecker(self.settings, __version__, self)
+        self.updates.update_changed.connect(self._on_update_changed)
+        self.updates.start()
+        self.release_notes = ReleaseNotesStore(
+            config.app_data_dir() / "release_notes.json", self
+        )
+        # A timer the window owns, not a fire-and-forget singleShot: a
+        # window closed within the first 400ms must not start syncing
+        # afterwards, on threads nothing will wait for.
+        self._closing = False
+        self._startup_sync = QTimer(self)
+        self._startup_sync.setSingleShot(True)
+        self._startup_sync.timeout.connect(self.start_sync)
         if self.db.get_accounts():
-            QTimer.singleShot(400, self.start_sync)
+            self._startup_sync.start(400)
 
     def _startup_integrity_check(self) -> None:
         """Verify the local database and stored sign-ins; repair, never crash."""
@@ -501,6 +521,14 @@ class MainWindow(QMainWindow):
         self.dock = self.toolbar.dock
         self.dock.folder_requested.connect(self._on_view_selected)
         self.dock.action_requested.connect(self._on_dock_action)
+        # Hidden until a newer release is found; hidden widgets take no
+        # room in the band, so there is no gap waiting for it.
+        self.update_btn = UpdateButton()
+        self.toolbar.add_trailing(self.update_btn)
+
+    def _on_update_changed(self, release) -> None:
+        self.update_btn.set_release(release)
+        self.toolbar.relayout()
 
     def _on_dock_action(self, key: str) -> None:
         if key == "add_account":
@@ -1364,6 +1392,8 @@ class MainWindow(QMainWindow):
         self._sync_timer.start(minutes * 60 * 1000)
 
     def start_sync(self) -> None:
+        if self._closing:
+            return
         accounts = self.db.get_accounts()
         if not accounts:
             self.statusBar().showMessage("Add an account to start syncing")
@@ -1495,7 +1525,8 @@ class MainWindow(QMainWindow):
             self.sync.request_sync([account["id"]])
 
     def open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self.manager, self)
+        dialog = SettingsDialog(self.settings, self.manager, self,
+                                release_notes=self.release_notes)
         # The theme applies the moment it is chosen - it is the one setting
         # whose effect has to be seen to be judged - and Cancel puts it back.
         dialog.theme_requested.connect(
@@ -1521,8 +1552,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------- close
 
     def closeEvent(self, event) -> None:
+        self._closing = True
+        self._startup_sync.stop()
         self._sync_timer.stop()
         self._reload_timer.stop()
+        self.updates.shutdown()
+        self.release_notes.shutdown()
         if self._account_dialog is not None:
             self._account_dialog.shutdown()
             self._account_dialog.close()

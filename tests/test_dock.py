@@ -357,6 +357,7 @@ def window(qapp, tmp_path, monkeypatch):
         worker.request_stop()
         worker.wait(2000)
     win.close()
+    win.deleteLater()
     motion.set_motion_enabled(True)
 
 
@@ -490,6 +491,7 @@ def empty_window(qapp, tmp_path, monkeypatch):
     qapp.processEvents()
     yield win, db
     win.close()
+    win.deleteLater()
 
 
 def test_no_accounts_is_a_layout_of_its_own(empty_window, qapp):

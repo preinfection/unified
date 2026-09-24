@@ -25,7 +25,7 @@ clipped or pushed off the edge.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtWidgets import QLineEdit, QPushButton, QSizePolicy
 
 from app.ui import theme as t
@@ -128,6 +128,17 @@ class TopToolBar(Toolbar):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self.relayout()
+
+    def event(self, event) -> bool:
+        # With no layout of its own, the band is sent a LayoutRequest
+        # whenever a child's size hint changes - Compose once the style
+        # sheet has given it its padding, the update button appearing.
+        # Placing everything again then is what keeps the arithmetic in
+        # step with what the children actually measure.
+        if event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.StyleChange,
+                            QEvent.Type.FontChange, QEvent.Type.Show):
+            self.relayout()
+        return super().event(event)
 
     def relayout(self) -> None:
         """Place the three groups. The dock is centred on the BAND, which
