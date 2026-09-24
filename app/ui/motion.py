@@ -120,6 +120,12 @@ def animate_property(target, prop: str, end, *, start=None,
     return anim
 
 
+def set_opacity(widget: QWidget, value: float) -> None:
+    """Hold a widget at an opacity, through the same reused effect the
+    fades use - for content that will fade in a beat after its window."""
+    _opacity_effect(widget).setOpacity(float(value))
+
+
 def fade_in(widget: QWidget, *, duration: int | None = None, on_done=None):
     """Show a widget by fading it up from transparent.
 

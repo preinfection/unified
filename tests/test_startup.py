@@ -403,3 +403,94 @@ def test_the_handover_fires_once_and_not_for_stage_changes(qapp):
     assert done == [True]
     _run_for(300)
     assert done == [True], "the handover fired more than once"
+
+
+# ------------------------------------------------------------------ globe
+
+def test_the_globe_turns_only_while_it_can_be_seen(qapp):
+    """One timer, running only while the opening surface is up."""
+    from app.ui.components.globe import FRAME_MS
+
+    motion.set_motion_enabled(True)
+    win = StartupWindow()
+    win.open_maximized()
+    qapp.processEvents()
+    try:
+        assert win.globe.is_turning()
+        assert win.globe._timer.interval() >= FRAME_MS >= 30, "a frame storm"
+        start = win.globe.angle()
+        from PySide6.QtCore import QEventLoop, QTimer
+        loop = QEventLoop()
+        QTimer.singleShot(250, loop.quit)
+        loop.exec()
+        assert win.globe.angle() > start, "it never turned"
+    finally:
+        win.close()
+    assert not win.globe.is_turning(), "the globe outlived its window"
+
+
+def test_reduced_motion_shows_a_still_globe_and_the_name_at_once(qapp, instant):
+    win = StartupWindow()
+    win.open_maximized()
+    qapp.processEvents()
+    try:
+        assert not win.globe.is_turning()
+        image = win.globe.grab().toImage()
+        lit = sum(
+            1 for x in range(0, image.width(), 3) for y in range(0, image.height(), 3)
+            if image.pixelColor(x, y).alpha() > 0
+        )
+        assert lit > 20, "reduced motion left an empty space where the globe was"
+        effect = win._identity.graphicsEffect()
+        assert effect is None or effect.opacity() == 1.0, "the name waited to appear"
+    finally:
+        win.close()
+
+
+def test_the_globe_comes_first_and_the_name_follows(qapp):
+    motion.set_motion_enabled(True)
+    win = StartupWindow()
+    win.open_maximized()
+    qapp.processEvents()
+    try:
+        assert win._identity.graphicsEffect().opacity() == 0.0
+        from PySide6.QtCore import QEventLoop, QTimer
+        loop = QEventLoop()
+        QTimer.singleShot(600, loop.quit)
+        loop.exec()
+        assert win._identity.graphicsEffect().opacity() == pytest.approx(1.0)
+    finally:
+        win.close()
+
+
+def test_the_globe_never_delays_a_fast_startup(qapp):
+    """Ready before the animation has anything to show: the bar skips its
+    run, and the only thing between "ready" and the shell is the one
+    cross-dissolve the window already had. The globe adds nothing."""
+    import time
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    motion.set_motion_enabled(True)
+    win = StartupWindow()
+    win.open_maximized()
+    done = []
+    began = time.monotonic()
+    win.finish(lambda: done.append(time.monotonic() - began))
+    deadline = time.monotonic() + 2
+    while not done and time.monotonic() < deadline:
+        loop = QEventLoop()
+        QTimer.singleShot(10, loop.quit)
+        loop.exec()
+    assert done, "the handover never ran"
+    assert done[0] * 1000 < t.DURATION_BASE + 150, (
+        f"handover took {done[0] * 1000:.0f}ms"
+    )
+
+
+def test_the_globe_reads_as_a_sphere_of_dots():
+    from app.ui.components.globe import graticule_points
+
+    points = graticule_points()
+    assert 200 < len(points) < 900, f"{len(points)} dots is not restrained"
+    for x, y, z in points:
+        assert abs(x * x + y * y + z * z - 1.0) < 1e-9

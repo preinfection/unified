@@ -41,6 +41,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app import APP_NAME
 from app.ui import motion, theme as t
+from app.ui.components.globe import DottedGlobe
 from app.ui.components.opening_bar import OpeningBar
 from app.ui.icons import make_app_icon
 from app.ui.native_theme import apply_dark_titlebar
@@ -56,6 +57,11 @@ _MIN_MARK_WIDTH = 168
 # one right edge instead of a ragged one.
 _CAPTION = "Encrypted locally"
 _LOCK_SIZE = 12
+
+# The beat between the globe appearing and the name following it. Short:
+# on most machines the whole opening is over within a second, and the
+# name must be up well before the shell replaces it.
+IDENTITY_DELAY_MS = 140
 
 
 def _mark_width() -> int:
@@ -116,6 +122,21 @@ class StartupWindow(QWidget):
         # surface sits slightly above the true one, and EmptyState uses
         # the same ratio, so the two agree about where "middle" is.
         root.addStretch(5)
+
+        # THE GLOBE COMES FIRST, THEN THE NAME. Adapted from Magic UI's
+        # Globe (see components/globe.py): many points turning as one
+        # sphere, which is what this product is - several accounts held as
+        # one - and it arrives a beat before the wordmark so the opening
+        # reads globe, then Unified, then the mailbox. Centred on the same
+        # axis as the identity block beneath it.
+        self.globe = DottedGlobe()
+        globe_row = QHBoxLayout()
+        globe_row.setContentsMargins(0, 0, 0, 0)
+        globe_row.addStretch(1)
+        globe_row.addWidget(self.globe)
+        globe_row.addStretch(1)
+        root.addLayout(globe_row)
+        root.addSpacing(t.SPACE_XXL)
 
         mark = QVBoxLayout()
         mark.setSpacing(0)
@@ -202,10 +223,20 @@ class StartupWindow(QWidget):
         / close behaviour intact. Nothing here hard-codes a resolution.
         """
         self.showMaximized()
-        # Only the identity rises. Fading the whole window in would flash
+        # Only the content rises. Fading the whole window in would flash
         # the desktop through it, and the surface is already the right
-        # colour from the first frame.
-        motion.fade_in(self._identity, duration=t.DURATION_SLOW)
+        # colour from the first frame. The globe first, the name a beat
+        # later; under reduced motion both are simply there.
+        motion.fade_in(self.globe, duration=t.DURATION_SLOW)
+        if motion.motion_enabled():
+            motion.set_opacity(self._identity, 0.0)
+            self._identity_timer = motion.after(
+                IDENTITY_DELAY_MS,
+                lambda: motion.fade_in(self._identity, duration=t.DURATION_SLOW),
+                self,
+            )
+        else:
+            motion.fade_in(self._identity)
 
     # ------------------------------------------------------------- stages
 
@@ -232,6 +263,7 @@ class StartupWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._closed = True
+        self.globe.stop()
         super().closeEvent(event)
 
     def set_stage(self, text: str) -> None:
