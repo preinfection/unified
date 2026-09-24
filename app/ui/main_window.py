@@ -276,7 +276,7 @@ class MainWindow(QMainWindow):
         t.apply_mode(mode)
         motion.set_motion_enabled(not bool(self.settings.get("reduced_motion")))
 
-    def set_theme_mode(self, mode: str) -> None:
+    def set_theme_mode(self, mode: str, *, origin=None) -> None:
         """Switch palettes live, in the one order that actually works.
 
         THERE ARE TWO HALVES AND THEY UPDATE DIFFERENTLY. The custom
@@ -297,26 +297,33 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QApplication
         from app.ui.style import get_stylesheet, invalidate_style_cache
 
-        t.apply_mode(mode)
-        self.settings.set("theme_mode", mode)
+        def apply() -> None:
+            t.apply_mode(mode)
+            self.settings.set("theme_mode", mode)
 
-        invalidate_style_cache()
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(get_stylesheet())
+            invalidate_style_cache()
+            app = QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(get_stylesheet())
 
-        apply_dark_titlebar(self, dark=t.is_dark())
+            apply_dark_titlebar(self, dark=t.is_dark())
 
-        # Text colour follows the stylesheet now (theme.role), but an ICON
-        # is a pixmap tinted at build time and cannot. Anything holding one
-        # declares a retheme() and is found by the walker, so this does not
-        # depend on a hand-maintained list of which widgets those are.
-        t.retheme_tree(self)
-        for widget in (self, self.email_list.viewport(), self.console):
-            widget.update()
-        self.statusBar().showMessage(
-            "Light theme" if mode == "light" else "Dark theme"
-        )
+            # Text colour follows the stylesheet now (theme.role), but an
+            # ICON is a pixmap tinted at build time and cannot. Anything
+            # holding one declares a retheme() and is found by the walker,
+            # so this does not depend on a hand-maintained list of which
+            # widgets those are. Top-level dialogs are walked too: Settings
+            # is open when its own theme control is used.
+            t.retheme_tree(self)
+            for widget in (self, self.email_list.viewport(), self.console):
+                widget.update()
+            self.statusBar().showMessage(
+                "Light theme" if mode == "light" else "Dark theme"
+            )
+
+        # The change spreads from `origin` (the theme control) when there is
+        # one, and fades when there is not; see motion.reveal_theme_change.
+        motion.reveal_theme_change(apply, origin=origin)
 
     def toggle_theme(self) -> None:
         self.set_theme_mode("light" if t.is_dark() else "dark")
@@ -1489,6 +1496,11 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self.manager, self)
+        # The theme applies the moment it is chosen - it is the one setting
+        # whose effect has to be seen to be judged - and Cancel puts it back.
+        dialog.theme_requested.connect(
+            lambda mode, origin: self.set_theme_mode(mode, origin=origin)
+        )
         if dialog.exec():
             self._apply_sync_interval()
             # Appearance can have moved under us: the dialog writes

@@ -1,8 +1,8 @@
 """The app's motion vocabulary.
 
-WHY THIS FILE EXISTS. Animation was being written per widget: NavPill owns
-a QPropertyAnimation on a float, AccentButton owns another, ToastHost owns
-a third, and each one picked its own duration and curve at the call site.
+WHY THIS FILE EXISTS. Animation was being written per widget: the old nav
+pill owned a QPropertyAnimation on a float, AccentButton owned another,
+ToastHost a third, and each one picked its own duration and curve at the call site.
 Three components, three slightly different ideas of what "fast" means. A
 fourth would have made four. The durations and the curve already live in
 theme.py; what was missing was one place that KNOWS HOW TO APPLY them, so
@@ -21,6 +21,8 @@ happening is asking to be watched, and this one is trying to be read.
     cross_fade              one thing replaced another in place
     animate_property        a value moved (a width, an indicator, a float)
     flash                   an action landed and had no other visible result
+    reveal                  content arrived because the context changed
+    reveal_theme_change     the palette changed, spreading from its cause
 
 THE REDUCED-MOTION RULE IS ENFORCED HERE, ONCE. Qt exposes no
 prefers-reduced-motion, so the switch is the app's own setting. Every
@@ -46,8 +48,11 @@ from PySide6.QtCore import (
     QByteArray,
     QEasingCurve,
     QPropertyAnimation,
+    QRectF,
+    Qt,
     QTimer,
 )
+from PySide6.QtGui import QBrush, QPainter, QPainterPath
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
 
 from app.ui import theme as t
@@ -303,3 +308,138 @@ def reveal(widget: QWidget, *, offset: int = 6, duration: int | None = None):
         rise.setEndValue(0.0)
         rise.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
     return fade
+
+
+# --------------------------------------------------------------- theme change
+
+class _ThemeCurtain(QWidget):
+    """The previous theme, held over one window while the new one opens
+    beneath it.
+
+    A texture brush over a path, not a clip: QPainter clips are aliased,
+    and a hard-stepped circle edge travelling across a whole window for
+    400ms is exactly the kind of cheapness the effect cannot afford.
+    fillPath with the snapshot as the brush is antialiased and costs one
+    fill per frame.
+    """
+
+    def __init__(self, window: QWidget, snapshot, centre, circle: bool):
+        super().__init__(window)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setObjectName("themeCurtain")
+        self._snapshot = snapshot
+        self._centre = centre
+        self._circle = circle
+        self._radius = 0.0
+        self._opacity = 1.0
+        self.setGeometry(window.rect())
+        self.show()
+        self.raise_()
+
+    def set_state(self, radius: float, opacity: float) -> None:
+        self._radius = radius
+        self._opacity = opacity
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        whole = QPainterPath()
+        whole.addRect(QRectF(self.rect()))
+        if self._circle:
+            hole = QPainterPath()
+            hole.addEllipse(self._centre, self._radius, self._radius)
+            whole = whole.subtracted(hole)
+        else:
+            painter.setOpacity(self._opacity)
+        painter.fillPath(whole, QBrush(self._snapshot))
+        painter.end()
+
+
+def _app_windows() -> list[QWidget]:
+    from PySide6.QtWidgets import QApplication
+
+    return [
+        w for w in QApplication.topLevelWidgets()
+        if w.isVisible()
+        and w.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog)
+        and w.width() > 0 and w.height() > 0
+    ]
+
+
+def reveal_theme_change(apply, *, origin=None, windows=None):
+    """Change the theme, and let the new one spread from where it was asked
+    for.
+
+    ADAPTED FROM MAGIC UI'S ANIMATED THEME TOGGLER, whose whole idea is a
+    circle opening at the button and the page changing inside it: cause
+    and effect in one place. The browser does it with the View
+    Transitions API; natively it is a snapshot of each open window taken
+    BEFORE the switch, laid over that window, with a growing hole cut in
+    it. The expensive part - rebuilding the stylesheet - happens under the
+    snapshot, so no half-switched frame is ever seen.
+
+    `origin` is a GLOBAL point. The same circle is used for every window,
+    so with Settings open over the main window the change runs out of the
+    dialog and on across the window behind it as one continuous edge.
+    With no origin (a keyboard shortcut has no place on screen) the old
+    theme simply fades instead.
+
+    Reduced motion: apply() and nothing else. Not a very fast reveal - no
+    reveal.
+    """
+    if not _ENABLED:
+        apply()
+        return None
+
+    from PySide6.QtCore import QPointF, QVariantAnimation
+
+    targets = windows if windows is not None else _app_windows()
+    curtains: list[_ThemeCurtain] = []
+    reach = 0.0
+    for window in targets:
+        snapshot = window.grab()
+        if origin is not None:
+            local = window.mapFromGlobal(origin)
+            centre = QPointF(local)
+            w, h = window.width(), window.height()
+            corners = ((0, 0), (w, 0), (0, h), (w, h))
+            reach = max(reach, max(
+                ((cx - centre.x()) ** 2 + (cy - centre.y()) ** 2) ** 0.5
+                for cx, cy in corners
+            ))
+        else:
+            centre = QPointF(0, 0)
+        curtains.append(_ThemeCurtain(window, snapshot, centre, origin is not None))
+
+    apply()
+
+    if not curtains:
+        return None
+
+    anim = QVariantAnimation(curtains[0])
+    anim.setDuration(t.DURATION_THEME)
+    anim.setEasingCurve(curve())
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+
+    def step(value) -> None:
+        for curtain in list(curtains):
+            try:
+                curtain.set_state(float(value) * reach, 1.0 - float(value))
+            except RuntimeError:        # its window closed mid-reveal
+                curtains.remove(curtain)
+
+    def done() -> None:
+        for curtain in curtains:
+            try:
+                curtain.hide()
+                curtain.deleteLater()
+            except RuntimeError:
+                pass
+
+    anim.valueChanged.connect(step)
+    anim.finished.connect(done)
+    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    return anim

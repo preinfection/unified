@@ -389,6 +389,11 @@ ICON_SIZE_NAV = 17
 DURATION_FAST = 120   # hover and press feedback
 DURATION_BASE = 180   # selection changes, content swaps
 DURATION_SLOW = 280   # panels, dialogs
+# The theme reveal: one circle crossing the whole window. It is the only
+# transition that has to travel a full window's diagonal, and at 280ms that
+# distance reads as a flash rather than as something opening. Magic UI's
+# toggler uses 400ms for the same reason.
+DURATION_THEME = 400
 
 
 def ease_out():

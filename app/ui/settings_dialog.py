@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import shutil
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -59,6 +59,7 @@ from app.ui import theme as t
 from app.ui.components.dropdown import Dropdown
 from app.ui.components.primitives import Button, Rule, Variant
 from app.ui.components.section_header import DialogHeading, SectionHeader
+from app.ui.components.theme_toggle import ThemeToggle
 from app.ui.components.toggle import Toggle
 from app.ui.svg_icon import icon_set
 
@@ -178,7 +179,15 @@ def _spin(*, low: int, high: int, step: int, suffix: str, value: int) -> QSpinBo
 
 
 class SettingsDialog(QDialog):
-    """Emits accepted() after saving; the caller then re-reads Settings."""
+    """Emits accepted() after saving; the caller then re-reads Settings.
+
+    The theme is the exception to "nothing happens until Save": it is
+    requested live through theme_requested (with the control's global
+    position, so the change can spread from it), and reverted on Cancel.
+    """
+
+    #: (mode, global QPoint the request came from, or None for no place)
+    theme_requested = Signal(str, object)
 
     def __init__(self, settings: config.Settings, manager: AccountManager,
                  parent=None):
@@ -186,6 +195,8 @@ class SettingsDialog(QDialog):
         self.settings = settings
         self.manager = manager
         self.accounts_changed = False
+        # What to put back if the dialog is cancelled after a live change.
+        self._theme_on_open = str(settings.get("theme_mode") or "dark")
 
         self.setWindowTitle("Settings")
         self.setMinimumSize(720, 520)
@@ -304,11 +315,8 @@ class SettingsDialog(QDialog):
         )
 
     def _build_appearance_page(self) -> QWidget:
-        self.theme_dropdown = Dropdown(
-            [("Dark", "dark"), ("Light", "light")],
-            current=str(self.settings.get("theme_mode") or "dark"),
-        )
-        self.theme_dropdown.setFixedWidth(_CONTROL_WIDTH)
+        self.theme_toggle = ThemeToggle(self._theme_on_open)
+        self.theme_toggle.mode_requested.connect(self._on_theme_requested)
 
         self.density_dropdown = Dropdown(
             [("Comfortable", False), ("Compact", True)],
@@ -323,10 +331,9 @@ class SettingsDialog(QDialog):
         return _page(
             SectionHeader("Appearance"),
             _panel(
-                _row("Theme", self.theme_dropdown,
-                     "Both themes are warm rather than grey, and every text "
-                     "colour in each is measured against the surface it "
-                     "lands on."),
+                _row("Theme", self.theme_toggle,
+                     "Light or dark. It changes as soon as you choose, so "
+                     "you can judge it here; Cancel puts it back."),
                 _row("Message rows", self.density_dropdown,
                      "Comfortable shows the sender, the subject and a line of "
                      "the message. Compact drops the preview line and fits "
@@ -448,11 +455,23 @@ class SettingsDialog(QDialog):
             self.accounts_changed = True
             self._reload_accounts()
 
+    def _on_theme_requested(self, mode: str) -> None:
+        centre = self.theme_toggle.rect().center()
+        self.theme_requested.emit(mode, self.theme_toggle.mapToGlobal(centre))
+
+    def reject(self) -> None:
+        # Put back a theme that was only being tried. From the dialog's
+        # centre rather than the control: Cancel is not the toggle.
+        if self.theme_toggle.mode() != self._theme_on_open:
+            self.theme_toggle.set_mode(self._theme_on_open)
+            self.theme_requested.emit(self._theme_on_open, None)
+        super().reject()
+
     def _save(self) -> None:
         self.settings.set("sync_interval_minutes", self.interval_spin.value())
         self.settings.set("notifications_enabled", self.notify_toggle.isChecked())
         self.settings.set("messages_shown", self.shown_spin.value())
-        self.settings.set("theme_mode", str(self.theme_dropdown.value()))
+        self.settings.set("theme_mode", self.theme_toggle.mode())
         self.settings.set("compact_rows", bool(self.density_dropdown.value()))
         self.settings.set("reduced_motion", bool(self.motion_toggle.isChecked()))
         self.accept()

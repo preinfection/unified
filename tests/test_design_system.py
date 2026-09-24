@@ -457,3 +457,30 @@ def test_custom_components_replace_the_stock_qt_widgets(qapp):
     from app.ui.components.sidebar import SidebarWidget
     sidebar = SidebarWidget()
     assert sidebar.width() == t.SIDEBAR_WIDTH
+
+
+def test_avatar_initials_are_legible_in_both_themes(qapp):
+    """THE LIGHT-MODE BUG. The ink rule was "light disc -> BG_APP", which
+    is dark ink in dark mode and near-white ink in light mode: every
+    light-mode avatar had a white initial on a pale disc. Measured against
+    all twelve disc steps, in both modes."""
+    from app.ui.components import avatar as av
+
+    def luminance(c: QColor) -> float:
+        def ch(v: int) -> float:
+            v = v / 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
+
+    try:
+        for mode in ("dark", "light"):
+            t.apply_mode(mode)
+            for step in range(av._STEPS):
+                amount = av._MIN_MIX + (av._MAX_MIX - av._MIN_MIX) * step / (av._STEPS - 1)
+                fill = QColor(t.mix(t.BG_PANEL, t.BORDER_LIGHT, amount))
+                ink = av.avatar_ink(fill)
+                hi, lo = sorted((luminance(fill), luminance(ink)), reverse=True)
+                ratio = (hi + 0.05) / (lo + 0.05)
+                assert ratio >= 4.5, f"{mode} step {step}: initial at {ratio:.2f}:1"
+    finally:
+        t.apply_mode("dark")

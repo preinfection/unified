@@ -74,8 +74,17 @@ def avatar_ink(fill: QColor) -> QColor:
     Picked by measured lightness rather than by theme, because the discs
     span a range: the same rule has to work for the darkest step in light
     mode and the lightest step in dark mode.
+
+    WHICH OF THE TWO TOKENS IS THE LIGHT ONE FLIPS WITH THE THEME, and the
+    old rule forgot that: "light disc -> BG_APP" is dark ink in dark mode
+    and near-white ink in light mode, so every light-mode avatar drew a
+    white initial on a pale disc - the letter all but invisible. The choice
+    is now made on the inks' own lightness: a dark disc gets whichever
+    candidate is lighter, a light disc whichever is darker.
     """
-    return QColor(t.TEXT_PRIMARY) if fill.lightness() < 128 else QColor(t.BG_APP)
+    a, b = QColor(t.TEXT_PRIMARY), QColor(t.BG_APP)
+    lighter, darker = (a, b) if a.lightness() > b.lightness() else (b, a)
+    return lighter if fill.lightness() < 128 else darker
 
 
 def initial_letter(name: str, email: str) -> str:
