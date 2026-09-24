@@ -48,7 +48,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -60,6 +59,7 @@ from app.ui import motion, theme as t
 from app.ui.components.dropdown import Dropdown
 from app.ui.components.primitives import Button, IconButton, Rule, Variant
 from app.ui.components.section_header import DialogHeading
+from app.ui.components.typing import TypingTextEdit
 from app.ui.svg_icon import simple_icon
 
 log = logging.getLogger(__name__)
@@ -226,7 +226,11 @@ class ComposeDialog(QDialog):
         self.cc_toggle.setChecked(bool(cc))
 
         # ------------------------------------------------------------ body
-        self.body_edit = QPlainTextEdit()
+        # A TypingTextEdit so the quoted original of a reply or forward can
+        # be written in by the app - the one place Unified writes into the
+        # user's document - while everything the user types goes straight
+        # in. See components/typing.py.
+        self.body_edit = TypingTextEdit()
         self.body_edit.setObjectName("composeBody")
         self.body_edit.setFont(t.make_font("reading"))
         self.body_edit.setPlaceholderText("Write your message...")
@@ -239,6 +243,9 @@ class ComposeDialog(QDialog):
         self.body_edit.document().setDocumentMargin(0)
         if body:
             self.body_edit.setPlainText(body)
+        # Typed in once the window is on screen, never before: an animation
+        # that runs before the first paint is one nobody sees.
+        self._reveal_pending = bool(body) and self.mode != "new"
         outer.addWidget(self.body_edit, stretch=1)
 
         outer.addWidget(Rule())
@@ -274,6 +281,12 @@ class ComposeDialog(QDialog):
             # the top; putting the cursor at the end would open every
             # reply scrolled to the bottom of the original.
             self.body_edit.moveCursor(QTextCursor.MoveOperation.Start)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._reveal_pending:
+            self._reveal_pending = False
+            motion.after(0, lambda: self.body_edit.type_in(0), self)
 
     # ---------------------------------------------------------------- fields
 
@@ -327,6 +340,9 @@ class ComposeDialog(QDialog):
         self.to_edit.style().unpolish(self.to_edit)
         self.to_edit.style().polish(self.to_edit)
 
+        # Whatever is still being typed in is already in the document; this
+        # only stops the mask so the window shows what is being sent.
+        self.body_edit.finish_typing()
         self._sending = True
         self.send_btn.setEnabled(False)
         self.send_btn.setText(" Sending")
