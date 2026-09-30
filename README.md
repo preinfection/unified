@@ -1,5 +1,8 @@
 # Unified
 
+> [!WARNING]
+> **Unified is not finished yet.** It still has a lot of bugs, most of them in how it displays HTML emails. It should be complete by January 2027.
+
 Unified is a Windows desktop email client that combines multiple Gmail and IMAP accounts into one inbox. It provides a fast searchable local cache so you can read, search, and organize mail without switching between accounts.
 
 Built with Python, PySide6, and SQLite, Unified focuses on a modern desktop experience with offline access, background syncing, and secure local storage.
